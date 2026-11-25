@@ -86,9 +86,8 @@ function cleanReply(text) {
     return t;
 }
 
-export default {
-    async fetch(request, env) {
-        const origin = request.headers.get('Origin') || '';
+async function serveChatBot(request, env) {
+    const origin = request.headers.get('Origin') || '';
         const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
         const originOk = allowed.length === 0 || allowed.includes(origin);
         const cors = {
@@ -126,9 +125,6 @@ export default {
         let body;
         try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
         const messages = sanitizeMessages(body && body.messages);
-		console.log('Received body:', body);
-		console.log('Received messages:', messages);
-		console.log('Context:', buildSystem(body.context));
         let chat = {
             messages: [
                 { role: 'system', content: buildSystem(body.context) },
@@ -139,11 +135,24 @@ export default {
         try {
             response = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', chat);
         } catch (error) {
-            console.error('Cloudflare AI request failed', error);
             return json({ error: 'upstream' }, 502);
         }
 
         return json({ reply: response && cleanReply(response.response) || '' });
+}
+
+export default {
+    async fetch(request, env) {
+
+        const url = new URL(request.url);
+
+		if (url.pathname.startsWith("/chat")) {
+            const response = await serveChatBot(request, env);
+            return response;
+        }
+
+        return env.ASSETS.fetch(request);
+        
     }
 
 };
