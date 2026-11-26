@@ -3,8 +3,58 @@
 
 <head>
     <script>
-        window.APP_VERSION = "0.28";
+        window.APP_VERSION = "0.29";
         window.llm_url = "/chat";//"http://127.0.0.1:8787";
+
+        // Cache busting without top-level await: every module URL is mapped to a
+        // versioned URL. Modules themselves use plain relative imports.
+        (function () {
+            const version = encodeURIComponent(window.APP_VERSION);
+            const base = "./assets/js/";
+            const modules = [
+            "app.js",
+            "app/chat-context.js",
+            "app/game-session.js",
+            "chat/bot/companion-bot.js",
+            "chat/bot/llm-client.js",
+            "chat/bot/message-queue.js",
+            "chat/bot/nlu.js",
+            "chat/bot/packs/en.js",
+            "chat/bot/packs/fr.js",
+            "chat/bot/packs/index.js",
+            "chat/bot/player-memory.js",
+            "chat/bot/safety.js",
+            "chat/chat-controller.js",
+            "config.js",
+            "core/ai/heuristics.js",
+            "core/ai/index.js",
+            "core/game-state.js",
+            "core/rules-engine.js",
+            "core/rulesets.js",
+            "locales/en.js",
+            "locales/fr.js",
+            "services/event-bus.js",
+            "services/i18n.js",
+            "services/scores.js",
+            "services/sound.js",
+            "services/storage.js",
+            "ui/board-view.js",
+            "ui/chat-panel.js",
+            "ui/dom.js",
+            "ui/game-presenter.js",
+            "ui/last-move-view.js",
+            "ui/menu.js",
+            "ui/toolbar.js"
+            ];
+            const imports = {};
+            modules.forEach((file) => {
+                imports[new URL(base + file, document.baseURI).href] = base + file + "?v=" + version;
+            });
+            const map = document.createElement("script");
+            map.type = "importmap";
+            map.textContent = JSON.stringify({ imports });
+            document.head.appendChild(map);
+        })();
     </script>
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -32,16 +82,17 @@
         <button id="sound-toggle" type="button" aria-pressed="false"></button>
         <button id="fullscreen-toggle" type="button"></button>
         <button id="chat-toggle" type="button" aria-controls="computer-chat" aria-expanded="false" hidden>💬</button>
-        <section id="computer-chat" lang="fr" aria-label="Conversation avec l’ordinateur" hidden>
+        <!-- Texts and lang are filled in by ChatPanel from the active language -->
+        <section id="computer-chat" lang="en" aria-label="Conversation with the computer" hidden>
             <header class="chat-header">
                 <h2>Conversation</h2>
                 <span id="chat-persona"></span>
             </header>
             <div id="chat-log" role="log" aria-live="polite" aria-relevant="additions"></div>
             <form id="chat-form">
-                <label class="sr-only" for="chat-input">Votre message</label>
-                <input id="chat-input" type="text" maxlength="280" autocomplete="off" placeholder="Écrivez un message…">
-                <button id="chat-send" type="submit">Envoyer</button>
+                <label class="sr-only" for="chat-input">Your message</label>
+                <input id="chat-input" type="text" maxlength="280" autocomplete="off" placeholder="Write a message…">
+                <button id="chat-send" type="submit">Send</button>
             </form>
         </section>
         <div id="app-version"></div>
@@ -54,16 +105,12 @@
             const attribute = element.tagName === "LINK" ? "href" : "src";
             element.setAttribute(attribute, `${path}${separator}v=${window.APP_VERSION}`);
         });
-        document.getElementById("app-version").textContent = `v${window.APP_VERSION}`;
 
-        const lastMoveScript = document.createElement("script");
-        lastMoveScript.src = `assets/js/last-move.js?v=${window.APP_VERSION}`;
-        document.body.appendChild(lastMoveScript);
-
-        const script = document.createElement("script");
-        script.type = "module";
-        script.src = `assets/js/script.js?v=${window.APP_VERSION}`;
-        document.body.appendChild(script);
+        // Single entry point; everything else is imported from it.
+        const entry = document.createElement("script");
+        entry.type = "module";
+        entry.src = `assets/js/main.js?v=${window.APP_VERSION}`;
+        document.body.appendChild(entry);
     </script>
 </body>
 

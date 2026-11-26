@@ -1,6 +1,10 @@
-const APP_VERSION = globalThis.APP_VERSION || "0.26";
-const { getBoardSize, getSquareCount, RULESETS } =
-  await import(`./rulesets.js?v=${encodeURIComponent(APP_VERSION)}`);
+import {
+  DEFAULT_RULESET,
+  RULESETS,
+  getBoardSize,
+  getSquareCount,
+  isRuleset
+} from "./rulesets.js";
 
 function assertSquare(square) {
   if (!Number.isInteger(square) || square < 0) {
@@ -15,24 +19,22 @@ function copyPiece(piece) {
 /**
  * Serializable, DOM-independent checkers position state.
  *
- * This is the state boundary for a future server/peer transport: it contains
- * only plain data and never reads or mutates the board UI. Move legality remains
- * the responsibility of the rules engine; applyMove validates state integrity
- * and turn ownership before applying a move already accepted by that engine.
+ * Plain data only; never reads or mutates the board UI. Move legality is the
+ * rules engine's job; applyMove validates integrity and turn ownership before
+ * applying a move already accepted by that engine.
  */
 export class GameState {
   constructor({
     squares,
     turn = "white",
-    ruleset = "british",
+    ruleset = DEFAULT_RULESET,
     revision = 0,
     pendingCaptures = [],
     continuationSquare = null
   }) {
-    if (!RULESETS[ruleset]) {
+    if (!isRuleset(ruleset)) {
       throw new RangeError(`Invalid ruleset: ${ruleset}`);
     }
-    const boardSize = getBoardSize(ruleset);
     const squareCount = getSquareCount(ruleset);
     if (!Array.isArray(squares) || squares.length !== squareCount) {
       throw new TypeError(`Expected ${squareCount} board squares`);
@@ -99,6 +101,34 @@ export class GameState {
     return new GameState(snapshot);
   }
 
+  /** An empty board (used before a game starts). */
+  static empty(ruleset = DEFAULT_RULESET) {
+    return new GameState({
+      squares: Array(getSquareCount(ruleset)).fill(null),
+      turn: "white",
+      ruleset
+    });
+  }
+
+  /** The standard starting position of a ruleset. */
+  static initial(ruleset = DEFAULT_RULESET) {
+    const size = getBoardSize(ruleset);
+    const rows = RULESETS[ruleset].pieceRows;
+    const squares = Array(size * size).fill(null);
+    for (let row = 0; row < size; row++) {
+      for (let column = 0; column < size; column++) {
+        if ((row + column) % 2 !== 1) continue;
+        if (row < rows) squares[row * size + column] = { color: "black", king: false };
+        else if (row >= size - rows) squares[row * size + column] = { color: "white", king: false };
+      }
+    }
+    return new GameState({ squares, turn: "white", ruleset });
+  }
+
+  clone() {
+    return GameState.fromJSON(this.toJSON());
+  }
+
   toJSON() {
     return {
       squares: this.squares.map(copyPiece),
@@ -108,6 +138,41 @@ export class GameState {
       pendingCaptures: this.pendingCaptures.slice(),
       continuationSquare: this.continuationSquare
     };
+  }
+
+  /** Men and kings per colour. */
+  getMaterial() {
+    const material = {
+      white: { men: 0, kings: 0 },
+      black: { men: 0, kings: 0 }
+    };
+    this.squares.forEach((piece) => {
+      if (piece) material[piece.color][piece.king ? "kings" : "men"] += 1;
+    });
+    return material;
+  }
+
+  /**
+   * Compact, human/LLM-readable position: "<turn> <row>/<row>/…" where each row
+   * lists its dark squares (w/W white man/king, b/B black man/king, . empty).
+   */
+  toNotation() {
+    const size = getBoardSize(this.ruleset);
+    const rows = [];
+    for (let row = 0; row < size; row++) {
+      let text = "";
+      for (let column = 0; column < size; column++) {
+        if ((row + column) % 2 !== 1) continue;
+        const piece = this.squares[row * size + column];
+        text += !piece
+          ? "."
+          : piece.color === "white"
+            ? (piece.king ? "W" : "w")
+            : (piece.king ? "B" : "b");
+      }
+      rows.push(text);
+    }
+    return `${this.turn[0]} ${rows.join("/")}`;
   }
 
   /**
