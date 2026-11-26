@@ -1,14 +1,23 @@
-const APP_VERSION = globalThis.APP_VERSION || "0.26";
-const { GameState } =
-  await import(`./game-state.js?v=${encodeURIComponent(APP_VERSION)}`);
-const { getBoardSize, getSquareCount, RULESETS } =
-  await import(`./rulesets.js?v=${encodeURIComponent(APP_VERSION)}`);
+import { GameState } from "./game-state.js";
+import {
+  DEFAULT_RULESET,
+  RULESETS,
+  getBoardSize,
+  getSquareCount,
+  isRuleset
+} from "./rulesets.js";
 
 export { getBoardSize, getSquareCount, RULESETS };
 
+const DIAGONALS = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+
+function cloneOccupancy(squares) {
+  return squares.map((item) => (item ? { ...item } : null));
+}
+
 export class RulesEngine {
-  constructor(ruleset = "international") {
-    if (!RULESETS[ruleset]) throw new RangeError(`Unsupported ruleset: ${ruleset}`);
+  constructor(ruleset = DEFAULT_RULESET) {
+    if (!isRuleset(ruleset)) throw new RangeError(`Unsupported ruleset: ${ruleset}`);
     this.ruleset = ruleset;
     this.config = RULESETS[ruleset];
     this.boardSize = this.config.boardSize;
@@ -26,16 +35,21 @@ export class RulesEngine {
     const size = this.boardSize;
     const inBoard = (row, column) => row >= 0 && row < size && column >= 0 && column < size;
     const at = (row, column) => row * size + column;
-    const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
-    const occupancy = state.squares.map((item) => item ? { ...item } : null);
+    const occupancy = cloneOccupancy(state.squares);
+    const pending = state.pendingCaptures || [];
     const paths = [];
+
+    const restore = (original) => {
+      for (let i = 0; i < occupancy.length; i++) occupancy[i] = original[i];
+    };
 
     const search = (current, isKing, captured, steps) => {
       let foundCapture = false;
+      const currentRow = Math.floor(current / size);
+      const currentColumn = current % size;
+
       if (isKing && this.config.flyingKings) {
-        const currentRow = Math.floor(current / size);
-        const currentColumn = current % size;
-        directions.forEach(([rowStep, columnStep]) => {
+        DIAGONALS.forEach(([rowStep, columnStep]) => {
           let enemy = null;
           let nextRow = currentRow + rowStep;
           let nextColumn = currentColumn + columnStep;
@@ -47,20 +61,19 @@ export class RulesEngine {
                 if (
                   occupant.color !== piece.color &&
                   !captured.includes(square) &&
-                  !(state.pendingCaptures || []).includes(square)
+                  !pending.includes(square)
                 ) {
                   enemy = square;
-                }
-                else break;
+                } else break;
               }
             } else {
               if (occupant) break;
-              const nextOccupancy = occupancy.map((item) => item ? { ...item } : null);
-              nextOccupancy[current] = null;
-              if (!this.config.deferCapturedPieces) nextOccupancy[enemy] = null;
-              nextOccupancy[square] = { color: piece.color, king: true };
-              const original = occupancy.map((item) => item ? { ...item } : null);
-              for (let i = 0; i < occupancy.length; i++) occupancy[i] = nextOccupancy[i];
+              const next = cloneOccupancy(occupancy);
+              next[current] = null;
+              if (!this.config.deferCapturedPieces) next[enemy] = null;
+              next[square] = { color: piece.color, king: true };
+              const original = cloneOccupancy(occupancy);
+              for (let i = 0; i < occupancy.length; i++) occupancy[i] = next[i];
               foundCapture = true;
               search(
                 square,
@@ -68,20 +81,18 @@ export class RulesEngine {
                 [...captured, enemy],
                 [...steps, { to: square, capture: enemy }]
               );
-              for (let i = 0; i < occupancy.length; i++) occupancy[i] = original[i];
+              restore(original);
             }
             nextRow += rowStep;
             nextColumn += columnStep;
           }
         });
       } else {
-        const currentRow = Math.floor(current / size);
-        const currentColumn = current % size;
         const manDirections = isKing
-          ? directions
+          ? DIAGONALS
           : piece.color === "white"
-            ? this.config.menCaptureBackward ? directions : [[-1, -1], [-1, 1]]
-            : this.config.menCaptureBackward ? directions : [[1, -1], [1, 1]];
+            ? this.config.menCaptureBackward ? DIAGONALS : [[-1, -1], [-1, 1]]
+            : this.config.menCaptureBackward ? DIAGONALS : [[1, -1], [1, 1]];
         manDirections.forEach(([rowStep, columnStep]) => {
           const enemyRow = currentRow + rowStep;
           const enemyColumn = currentColumn + columnStep;
@@ -95,20 +106,20 @@ export class RulesEngine {
             enemyPiece &&
             enemyPiece.color !== piece.color &&
             !captured.includes(enemy) &&
-            !(state.pendingCaptures || []).includes(enemy) &&
+            !pending.includes(enemy) &&
             occupancy[landing] === null
           ) {
-            const nextOccupancy = occupancy.map((item) => item ? { ...item } : null);
-            nextOccupancy[current] = null;
-            if (!this.config.deferCapturedPieces) nextOccupancy[enemy] = null;
+            const next = cloneOccupancy(occupancy);
+            next[current] = null;
+            if (!this.config.deferCapturedPieces) next[enemy] = null;
             const promotionRow = landingRow === 0 || landingRow === size - 1;
             const becomesKing = isKing || (
               promotionRow &&
               !this.config.menCaptureBackward
             );
-            nextOccupancy[landing] = { color: piece.color, king: becomesKing };
-            const original = occupancy.map((item) => item ? { ...item } : null);
-            for (let i = 0; i < occupancy.length; i++) occupancy[i] = nextOccupancy[i];
+            next[landing] = { color: piece.color, king: becomesKing };
+            const original = cloneOccupancy(occupancy);
+            for (let i = 0; i < occupancy.length; i++) occupancy[i] = next[i];
             foundCapture = true;
             const nextSteps = [...steps, { to: landing, capture: enemy }];
             if (becomesKing && !isKing) {
@@ -120,7 +131,7 @@ export class RulesEngine {
             } else {
               search(landing, becomesKing, [...captured, enemy], nextSteps);
             }
-            for (let i = 0; i < occupancy.length; i++) occupancy[i] = original[i];
+            restore(original);
           }
         });
       }
@@ -170,7 +181,7 @@ export class RulesEngine {
       nextColumn >= 0 && nextColumn < this.boardSize;
     const at = (nextRow, nextColumn) => nextRow * this.boardSize + nextColumn;
     const directions = piece.king
-      ? [[-1, -1], [-1, 1], [1, -1], [1, 1]]
+      ? DIAGONALS
       : piece.color === "white"
         ? [[-1, -1], [-1, 1]]
         : [[1, -1], [1, 1]];
@@ -236,20 +247,48 @@ export class RulesEngine {
     return captures;
   }
 
+  /**
+   * Every legal move of `color`, computed once.
+   * Returns Map<from, Array<{ to, captures, capture }>>.
+   * Mandatory-capture rules (including "longest capture") and capture
+   * continuations are already applied, so callers never need to re-derive them.
+   */
+  getAllLegalMoves(state, color = state.turn) {
+    const result = new Map();
+    const mandatory = this.getMandatoryCaptures(state, color);
+    if (mandatory.size > 0) {
+      mandatory.forEach((options, from) => {
+        result.set(
+          from,
+          options.map((option) => ({
+            to: option.to,
+            captures: option.captures.slice(),
+            capture: true
+          }))
+        );
+      });
+      return result;
+    }
+    if (state.continuationSquare != null) return result;
+    for (let from = 0; from < this.squareCount; from++) {
+      const piece = state.squares[from];
+      if (!piece || piece.color !== color) continue;
+      const moves = this.getSimpleMoves(state, from);
+      if (moves.length > 0) {
+        result.set(from, moves.map((to) => ({ to, captures: [], capture: false })));
+      }
+    }
+    return result;
+  }
+
   getLegalMoves(state, from) {
     if (!state || !Array.isArray(state.squares)) {
       throw new TypeError("A GameState snapshot is required");
     }
     const piece = state.squares[from];
     if (!piece) return [];
-
-    const captures = this.getCaptureOptions(state, from);
-    if (captures.length > 0) return captures.map((option) => option.to);
-    if (state.continuationSquare != null) return [];
-
-    const mandatory = this.getMandatoryCaptures(state, piece.color);
-    if (mandatory.size > 0) return [];
-    return this.getSimpleMoves(state, from);
+    const moves = this.getAllLegalMoves(state, piece.color).get(from) || [];
+    return moves.map((move) => move.to);
   }
 
   getCaptureMoves(state, from) {
@@ -271,46 +310,34 @@ export class RulesEngine {
     if (piece.color !== state.turn) return { valid: false, error: "It is not this piece's turn" };
     if (state.squares[command.to]) return { valid: false, error: "The destination square is occupied" };
 
-    const mandatory = this.getMandatoryCaptures(state, piece.color);
-    const options = this.getCaptureOptions(state, command.from);
+    const moves = this.getAllLegalMoves(state, piece.color);
+    const mandatory = [...moves.values()].some((list) => list.some((move) => move.capture));
+    const options = moves.get(command.from) || [];
     if (state.continuationSquare != null && options.length === 0) {
       return { valid: false, error: "A capture continuation is mandatory" };
     }
-    if (mandatory.size > 0) {
-      if (!mandatory.has(command.from)) {
-        return { valid: false, error: "A capture is mandatory" };
-      }
-      const match = options.find((option) => option.to === command.to);
-      if (!match) return { valid: false, error: "The capture is illegal" };
-      return { valid: true, captures: match.captures, capture: true };
+    const match = options.find((option) => option.to === command.to);
+    if (match) return { valid: true, captures: match.captures, capture: match.capture };
+    if (mandatory) {
+      return {
+        valid: false,
+        error: moves.has(command.from) ? "The capture is illegal" : "A capture is mandatory"
+      };
     }
-
-    if (options.length > 0) {
-      const match = options.find((option) => option.to === command.to);
-      if (match) return { valid: true, captures: match.captures, capture: true };
-    }
-    if (!this.getSimpleMoves(state, command.from).includes(command.to)) {
-      return { valid: false, error: "The move is illegal" };
-    }
-    return { valid: true, captures: [], capture: false };
+    return { valid: false, error: "The move is illegal" };
   }
 
   hasLegalMoves(state, color) {
-    for (let from = 0; from < this.squareCount; from++) {
-      const piece = state.squares[from];
-      if (!piece || piece.color !== color) continue;
-      if (this.getLegalMoves(state, from).length > 0) return true;
-    }
-    return false;
+    return this.getAllLegalMoves(state, color).size > 0;
   }
 }
 
 export class CheckersRules extends RulesEngine {}
 
-export function getLegalMoves(state, from, ruleset = "international") {
+export function getLegalMoves(state, from, ruleset = DEFAULT_RULESET) {
   return new RulesEngine(ruleset).getLegalMoves(state, from);
 }
 
-export function validateMove(state, command, ruleset = "international") {
+export function validateMove(state, command, ruleset = DEFAULT_RULESET) {
   return new RulesEngine(ruleset).validateMove(state, command);
 }
