@@ -6,3 +6,6 @@ Vibe coding
 
 ## run locally
 npx wrangler dev
+
+## test
+npm test
