@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { createStorage } from "../public/assets/js/services/storage.js";
+import { BoardView } from "../public/assets/js/ui/board-view.js";
 import { manualScheduler, memoryBackend } from "./helpers.js";
 
 function boot({ language = "en", storageBackend = memoryBackend() } = {}) {
@@ -17,6 +18,54 @@ function boot({ language = "en", storageBackend = memoryBackend() } = {}) {
 }
 
 const click = (dom, node) => node.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+
+test("drag preview stays clean through chained captures", () => {
+  const dom = new JSDOM("<div id=\"game\"></div>", { pretendToBeVisual: true });
+  globalThis.document = dom.window.document;
+  const root = dom.window.document.getElementById("game");
+  let moves = [{ to: 9, captures: [1] }];
+  const view = new BoardView({
+    root,
+    getMovesFrom: () => moves,
+    onMove: () => {}
+  });
+  view.buildGrid("british");
+  const squares = Array(64).fill(null);
+  squares[0] = { color: "black", king: false };
+  view.render({ squares });
+  view.setInteractive({ movable: [0], forced: [0] });
+
+  const startDrag = (piece, pointerId) => {
+    piece.setPointerCapture = () => {};
+    const pointerEvent = (type, options) => {
+      const event = new dom.window.MouseEvent(type, { bubbles: true, ...options });
+      Object.defineProperty(event, "pointerId", { value: pointerId });
+      piece.dispatchEvent(event);
+    };
+    pointerEvent("pointerdown", { button: 0, clientX: 0, clientY: 0 });
+    pointerEvent("pointermove", { clientX: 10, clientY: 0 });
+    return dom.window.document.querySelector(".drag-preview");
+  };
+
+  const assertCleanPreview = (piece, pointerId) => {
+    const preview = startDrag(piece, pointerId);
+    assert.ok(preview);
+    assert.ok(preview.classList.contains("piece-black"));
+    assert.ok(piece.classList.contains("dragging"));
+    for (const transientClass of ["moving", "dragging", "highlight"]) {
+      assert.equal(preview.classList.contains(transientClass), false);
+    }
+  };
+  assertCleanPreview(root.children[0].querySelector(".piece"), 1);
+  root.dispatchEvent(new dom.window.Event("pointercancel", { bubbles: true }));
+
+  squares[0] = null;
+  squares[9] = { color: "black", king: false };
+  view.render({ squares });
+  moves = [{ to: 27, captures: [18] }];
+  view.setInteractive({ movable: [9], forced: [9] });
+  assertCleanPreview(root.children[9].querySelector(".piece"), 2);
+});
 
 test("full UI flow: menu → setup → start → click-move → computer reply → chat", async () => {
   const { dom, storage } = boot();

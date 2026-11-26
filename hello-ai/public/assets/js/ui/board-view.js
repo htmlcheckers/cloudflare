@@ -222,6 +222,7 @@ export class BoardView {
       const rect = drag.pieceElement.getBoundingClientRect();
       drag.preview = drag.pieceElement.cloneNode(false);
       drag.preview.removeAttribute("id");
+      drag.preview.classList.remove("moving", "dragging", "highlight");
       drag.preview.classList.add("drag-preview");
       drag.preview.style.width = rect.width + "px";
       drag.preview.style.height = rect.height + "px";
