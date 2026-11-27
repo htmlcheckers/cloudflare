@@ -102,7 +102,9 @@ test("full UI flow: menu → setup → start → click-move → computer reply �
   assert.ok(doc.querySelector(".menu-hidden"), "menu collapses to the cog");
   assert.equal(doc.getElementById("computer-chat").hidden, false);
   assert.equal(doc.getElementById("chat-toggle").hidden, false);
-  assert.equal(doc.getElementById("chat-persona").textContent, "Lucas");
+  assert.equal(doc.getElementById("chat-persona").textContent, app.chat.bot.persona.firstName);
+  assert.ok(app.chat.bot.persona.country);
+  assert.ok(app.chat.bot.persona.city);
 
   // click a movable piece, then one of its targets
   const [from, moves] = [...app.session.getLegalMoves()][0];

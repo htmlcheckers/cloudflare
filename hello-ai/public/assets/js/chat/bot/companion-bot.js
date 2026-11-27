@@ -6,7 +6,7 @@ import { CrisisGuard } from "./safety.js";
 import { getPack } from "./packs/index.js";
 
 /**
- * CompanionBot – the chat persona ("Lucas").
+ * CompanionBot – the chat persona selected for the current game.
  *
  * Public port (everything the app is allowed to call):
  *   start()                          greet the player
@@ -24,7 +24,8 @@ import { getPack } from "./packs/index.js";
  */
 export class CompanionBot {
   constructor(options = {}) {
-    this.name = options.name || "Lucas";
+    this.persona = options.persona || null;
+    this.name = options.name || (this.persona && this.persona.firstName) || "Lucas";
     this.onTypingChange = options.onTypingChange || (() => {});
     this.onMessage = options.onMessage || (() => {});
     this.getContext = options.getContext || (() => ({}));
