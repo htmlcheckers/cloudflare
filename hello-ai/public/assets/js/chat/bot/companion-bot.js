@@ -37,7 +37,7 @@ export class CompanionBot {
     this.guard = new CrisisGuard();
     this.setLanguage(options.language || "fr");
 
-    this.history = this.#readHistoricState().messages.slice(-2); // unsummarized turns since the last compact
+    this.history = this.#readHistoricState().messages.slice(-10);
     this.llmSeq = 0; // invalidates an LLM answer if the player writes again while we wait
     this.llmPending = Promise.resolve();
 
@@ -248,9 +248,9 @@ export class CompanionBot {
     saved.messages.push(message);
     saved.messages = saved.messages.slice(-10);
     this.#writeHistoricState(saved);
-    // Keep enough context to reach the summarization threshold, then the
-    // successful summary will compact this back to the newest two messages.
-    if (this.history.length > 10) this.history.splice(0, this.history.length - 10);
+    // Keep enough context to reach the summarization threshold, then compact
+    // to the newest ten messages after a successful summary.
+    if (this.history.length > 20) this.history.splice(0, this.history.length - 20);
   }
 
   #historicKey() {
@@ -358,8 +358,8 @@ export class CompanionBot {
         ...historySnapshot,
         ...(current ? [{ role: "assistant", content: result.reply }] : [])
       ];
-      if (completedHistory.length >= 10) {
-        const summarizedCount = completedHistory.length - 2;
+      if (completedHistory.length >= 20) {
+        const summarizedCount = completedHistory.length - 10;
         const historic = await this.llm.summarize({
           history: completedHistory.slice(0, summarizedCount),
           context,
