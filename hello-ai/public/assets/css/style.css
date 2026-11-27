@@ -620,6 +620,17 @@ body {
   cursor: not-allowed;
 }
 
+.menu-restart {
+  margin-top: 3vmin;
+  font-size: max(10px, 3vmin);
+  opacity: 0.8;
+}
+
+.menu-restart:hover {
+  font-size: max(10px, 3vmin);
+  letter-spacing: 0;
+}
+
 .menu-title {
   margin: 0 0 8px;
   color: #fff;

@@ -20,6 +20,7 @@ export const fr = {
   ok: "OK",
   startGame: "Commencer",
   restartGame: "Recommencer",
+  rematchGame: "Revanche",
   options: "Options",
   soundOn: "Activer le son",
   soundOff: "Désactiver le son",

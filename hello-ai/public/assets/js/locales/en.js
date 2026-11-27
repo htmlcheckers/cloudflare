@@ -20,6 +20,7 @@ export const en = {
   ok: "OK",
   startGame: "Start Game!",
   restartGame: "Restart",
+  rematchGame: "Rematch",
   options: "Options",
   soundOn: "Turn sound on",
   soundOff: "Turn sound off",

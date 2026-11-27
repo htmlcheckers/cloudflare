@@ -5,12 +5,14 @@ import { el } from "./dom.js";
  * Element ids and classes are the ones the existing stylesheet expects.
  */
 export class Menu {
-  constructor({ gameEl, session, i18n, sound, scores, presenter, onRestart, doc = globalThis.document }) {
+  constructor({ gameEl, session, i18n, sound, scores, presenter, getPersona = () => null, setNextPersona = () => {}, onRestart, doc = globalThis.document }) {
     this.gameEl = gameEl;
     this.session = session;
     this.i18n = i18n;
     this.sound = sound;
     this.scores = scores;
+    this.getPersona = getPersona;
+    this.setNextPersona = setNextPersona;
     this.presenter = presenter;
     this.onRestart = onRestart;
     this.doc = doc;
@@ -72,10 +74,11 @@ export class Menu {
       menu.append(
         this.#closeButton(),
         el("div", { class: "menu-title" }, this.#t("menu")),
-        el("button", { class: "menu-item menu-action", id: "restart-game", type: "button", onclick: () => this.onRestart() }, this.#t("restartGame")),
+        el("button", { class: "menu-item menu-action", id: "rematch-game", type: "button", onclick: this.#click(() => this.#rematch()) }, this.#t("rematchGame")),
         el("button", { class: "menu-item menu-action", id: "options", type: "button", onclick: this.#click(() => this.options()) }, this.#t("options")),
         el("button", { class: "menu-item menu-action", id: "rules", type: "button", onclick: this.#click(() => this.rules()) }, this.#t("rules")),
-        el("button", { class: "menu-item menu-action", id: "results", type: "button", onclick: this.#click(() => this.results()) }, this.#t("results"))
+        el("button", { class: "menu-item menu-action", id: "results", type: "button", onclick: this.#click(() => this.results()) }, this.#t("results")),
+        el("button", { class: "menu-item menu-action menu-restart", id: "restart-game", type: "button", onclick: () => this.onRestart() }, this.#t("restartGame"))
       );
     } else {
       menu.append(
@@ -228,6 +231,16 @@ export class Menu {
     );
   }
 
+  #rematch() {
+    this.setNextPersona(this.getPersona());
+    this.gameEl.querySelector("#game-over")?.remove();
+    this.doc.querySelectorAll(".menu-hidden").forEach((button) => button.remove());
+    this.clearMenu();
+    this.session.start();
+    this.isOpen = false;
+    this.hiddenMenu();
+  }
+
   rules() {
     const menu = this.doc.getElementById("menu");
     menu.classList.add("menu-rules");
@@ -254,12 +267,16 @@ export class Menu {
   results() {
     const menu = this.doc.getElementById("menu");
     menu.classList.add("menu");
+    const activePersona = this.#isPlaying() ? this.getPersona() : null;
+    const personaScore = activePersona
+      ? this.scores.getByPersona()[activePersona.firstName] || { player: 0, computer: 0 }
+      : null;
     const score = this.scores.get();
-    const playerLine = el("p", { class: "submenu results-menu", id: "player-score" }, `${this.#t("player")}  ${score.player}`);
-    const computerLine = el("p", { class: "submenu results-menu", id: "computer-score" }, `${this.#t("computer")}  ${score.computer}`);
+    const playerLine = el("p", { class: "submenu results-menu", id: "player-score" }, `${this.#t("player")}  ${personaScore ? Number(personaScore.player) || 0 : score.player}`);
+    const computerLine = el("p", { class: "submenu results-menu", id: "computer-score" }, `${this.#t("computer")}  ${personaScore ? Number(personaScore.computer) || 0 : score.computer}`);
     menu.replaceChildren(
       this.#closeButton(),
-      el("div", { class: "menu-item new-page", id: "results" }, this.#t("results")),
+      el("div", { class: "menu-item new-page", id: "results" }, activePersona ? `${this.#t("results")} — ${activePersona.firstName}` : this.#t("results")),
       playerLine,
       computerLine,
       el(

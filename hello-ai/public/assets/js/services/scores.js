@@ -28,8 +28,29 @@ export class ScoreBoard {
     this.storage.set(this.keys[role], this.get()[role] + 1);
   }
 
+  getByPersona() {
+    try {
+      const saved = JSON.parse(this.storage.get("personaScores", "{}"));
+      if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+      return saved;
+    } catch {
+      return {};
+    }
+  }
+
+  incrementForPersona(role, persona) {
+    if ((role !== "player" && role !== "computer") || !persona?.firstName) return;
+    const scores = this.getByPersona();
+    const name = persona.firstName;
+    const score = scores[name] || { player: 0, computer: 0 };
+    score[role] = this.#parse(score[role]) + 1;
+    scores[name] = score;
+    this.storage.set("personaScores", JSON.stringify(scores));
+  }
+
   reset() {
     this.storage.set(this.keys.player, 0);
     this.storage.set(this.keys.computer, 0);
+    this.storage.set("personaScores", "{}");
   }
 }

@@ -18,6 +18,7 @@ export class ChatController {
     this.contextBuilder = contextBuilder;
     this.selectPersona = selectPersona;
     this.persona = null;
+    this.nextPersona = null;
     this.bot = null;
     this.generation = 0;
     this.pending = false;
@@ -44,7 +45,8 @@ export class ChatController {
     this.panel.activate();
     this.#setPending(true);
 
-    this.persona = this.selectPersona();
+    this.persona = this.nextPersona || this.selectPersona();
+    this.nextPersona = null;
     this.bot = this.createBot({
       name: this.persona.firstName,
       persona: this.persona,
@@ -63,6 +65,10 @@ export class ChatController {
     this.generation++;
     if (this.bot) this.bot.destroy();
     this.bot = null;
+  }
+
+  setNextPersona(persona) {
+    this.nextPersona = persona || null;
   }
 
   #setPending(pending) {

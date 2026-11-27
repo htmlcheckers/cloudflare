@@ -69,7 +69,10 @@ export function createApp({
     doc,
     messagesEl: byId("messages")
   });
-  bus.on("game:over", ({ winner }) => scores.increment(winner));
+  bus.on("game:over", ({ winner }) => {
+    scores.increment(winner);
+    scores.incrementForPersona(winner, chat.persona);
+  });
 
   // --- chat ---
   const memory = new PlayerMemory({ storage });
@@ -99,7 +102,7 @@ export function createApp({
   });
 
   // --- menu ---
-  const menu = new Menu({ gameEl, session, i18n, sound, scores, presenter, onRestart: reload, doc });
+  const menu = new Menu({ gameEl, session, i18n, sound, scores, presenter, getPersona: () => chat.persona, setNextPersona: (persona) => chat.setNextPersona(persona), onRestart: reload, doc });
   menu.createMenu();
 
   const versionEl = byId("app-version");
