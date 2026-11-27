@@ -6,7 +6,7 @@ import { CrisisGuard } from "./safety.js";
 import { getPack } from "./packs/index.js";
 
 /**
- * CompanionBot – the chat persona ("Lucas").
+ * CompanionBot – the chat persona selected for the current game.
  *
  * Public port (everything the app is allowed to call):
  *   start()                          greet the player
@@ -24,7 +24,8 @@ import { getPack } from "./packs/index.js";
  */
 export class CompanionBot {
   constructor(options = {}) {
-    this.name = options.name || "Lucas";
+    this.persona = options.persona || null;
+    this.name = options.name || (this.persona && this.persona.firstName) || "Lucas";
     this.onTypingChange = options.onTypingChange || (() => {});
     this.onMessage = options.onMessage || (() => {});
     this.getContext = options.getContext || (() => ({}));
@@ -38,6 +39,7 @@ export class CompanionBot {
 
     this.history = []; // [{ role: 'user' | 'assistant', content }] sent to the LLM as context
     this.llmSeq = 0; // invalidates an LLM answer if the player writes again while we wait
+    this.llmPending = Promise.resolve();
 
     this.state = {
       botMood: "chill", // chill | confident | nervous | tilted
@@ -210,6 +212,7 @@ export class CompanionBot {
     s.lastPlayerMessageTime = Date.now();
     this.llmSeq++;
     this.#remember("user", playerText);
+    const historySnapshot = this.history.slice();
     // Anything casual we were about to say is stale now: answer the player first
     this.queue.dropBelow(2);
 
@@ -218,15 +221,19 @@ export class CompanionBot {
     else if (nlu.scores.high_morale || nlu.scores.humor) s.playerMorale = Math.min(10, s.playerMorale + 2);
 
     const reply = this._buildReply(playerText, nlu);
-    if (reply.llm && this.llm) this.#replyWithLLM(reply);
-    else this.#deliverReply(reply);
+    const localSafetyReply = nlu.scores.crisis || this.guard.isActive();
+    if (this.llm && !localSafetyReply) this.#replyWithLLM(reply, playerText, historySnapshot);
+    else {
+      this.#appendHistoricLine("Player", playerText);
+      this.#deliverReply(reply);
+    }
   }
 
   #deliverReply(reply) {
     const texts = [].concat(reply.text);
     texts.forEach((text, i) => {
       const isLast = i === texts.length - 1;
-      this.#send(text, reply.priority || 2, isLast && reply.ask ? () => this.#markAsked(reply.ask) : null);
+      this.#send(text, reply.priority || 2, isLast && reply.ask ? () => this.#markAsked(reply.ask) : null, false, true);
     });
     if (reply.followUp) {
       this.followUpTimer = setTimeout(() => this._askNext(), 4500 * this.pace);
@@ -240,6 +247,32 @@ export class CompanionBot {
     if (this.history.length > 24) this.history.splice(0, this.history.length - 24);
   }
 
+  #historicKey() {
+    const personaKey = encodeURIComponent((this.persona?.firstName || this.name).toLowerCase());
+    return `checkers_bot_historic_${personaKey}`;
+  }
+
+  #getHistoric() {
+    const historic = (this.memory.storage?.get(this.#historicKey(), "") || "").slice(0, 200);
+    // Older versions could save automatic bot greetings without any player turn.
+    if (/^Bot:\s*/i.test(historic) && !/(?:^|\|\s*)Player:\s*/i.test(historic)) {
+      this.memory.storage?.remove(this.#historicKey());
+      return "";
+    }
+    return historic;
+  }
+
+  #appendHistoricLine(role, content) {
+    const cleanContent = String(content).replace(/\s+/g, " ").trim();
+    const line = `${role}: ${cleanContent.slice(-(200 - role.length - 2))}`;
+    const prior = this.#getHistoric();
+    const separator = prior ? " | " : "";
+    const room = Math.max(0, 200 - line.length - separator.length);
+    const keptPrior = prior.slice(-room);
+    const historic = `${keptPrior}${keptPrior ? separator : ""}${line}`.slice(-200);
+    this.memory.storage?.set(this.#historicKey(), historic);
+  }
+
   /** What leaves the browser. Whitelisted, plain JSON. */
   _llmContext() {
     const s = this.state;
@@ -247,6 +280,7 @@ export class CompanionBot {
     const external = this.getContext() || {};
     const hour = new Date().getHours();
     const distress = this.guard.isActive();
+    const historic = this.#getHistoric().trim();
     return {
       // Flat fields: kept for compatibility with the existing proxy
       botName: this.name,
@@ -261,22 +295,55 @@ export class CompanionBot {
       recentDistress: distress,
       hour,
       // Structured game context (what is actually happening on the board)
-      game: external.game || null
+      game: external.game || null,
+      historic,
+      firstMeeting: historic.length === 0,
+      persona: this.persona
+        ? {
+            firstName: this.persona.firstName,
+            gender: this.persona.gender,
+            city: this.persona.city,
+            country: this.persona.country,
+            preferredLanguage: this.persona.preferredLanguage,
+            trait: this.persona.trait
+          }
+        : null
     };
   }
 
-  #replyWithLLM(reply) {
+  #replyWithLLM(reply, playerText, historySnapshot) {
     const seq = this.llmSeq;
-    this.llm
-      .ask({ history: this.history, context: this._llmContext(), reject: this.pack.llmReject })
-      .then((text) => {
-        if (seq !== this.llmSeq) return; // newer message gets its own answer
-        if (text) {
-          this.#send(text, 3, /\?\s*$/.test(text) ? () => this.#markAsked("open") : null, true);
-        } else {
-          this.#deliverReply(reply); // fall back to the built-in reply
-        }
+    this.llmPending = this.llmPending.catch(() => {}).then(async () => {
+      const context = this._llmContext();
+      const result = await this.llm.ask({
+        message: playerText,
+        history: historySnapshot,
+        context,
+        reject: this.pack.llmReject
       });
+      if (!result?.reply) {
+        this.#appendHistoricLine("Player", playerText);
+        if (seq === this.llmSeq) this.#deliverReply(reply);
+        return;
+      }
+
+      const current = seq === this.llmSeq;
+      if (current) {
+        this.#send(result.reply, 3, /\?\s*$/.test(result.reply) ? () => this.#markAsked("open") : null, true, false);
+      }
+
+      const historic = await this.llm.summarize({
+        history: historySnapshot,
+        context,
+        playerMessage: playerText,
+        reply: current ? result.reply : ""
+      });
+      if (historic) this.memory.storage?.set(this.#historicKey(), historic.slice(0, 200));
+      else {
+        this.#appendHistoricLine("Player", playerText);
+        if (current) this.#appendHistoricLine("Bot", result.reply);
+      }
+    });
   }
 
   #markAsked(id) {
@@ -437,7 +504,7 @@ export class CompanionBot {
   _buildStartGreeting() {
     const P = this.pack.text;
     const m = this.memory;
-    if (m.gamesPlayed <= 1) return P.startFirst.slice();
+    if (!this.#getHistoric().trim()) return P.startFirst.slice();
     if (m.lossStreak >= 2) return P.startAfterLosses;
     return this._compose("chill", P.startAgain);
   }
@@ -479,13 +546,19 @@ export class CompanionBot {
     return out.charAt(0).toUpperCase() + out.slice(1);
   }
 
-  #send(textOrList, priority = 1, after = null, immediate = false) {
+  #send(textOrList, priority = 1, after = null, immediate = false, persistHistoric = null) {
     const list = [].concat(textOrList).filter(Boolean);
     const items = [];
     list.forEach((raw, i) => {
       const text = this._finalize(raw);
       if (!text) return;
-      items.push({ text, priority, after: i === list.length - 1 ? after : null, immediate });
+      items.push({
+        text,
+        priority,
+        after: i === list.length - 1 ? after : null,
+        immediate,
+        persistHistoric: persistHistoric ?? Boolean(this.#getHistoric().trim())
+      });
     });
     if (items.length > 0) this.queue.push(items);
   }
@@ -497,6 +570,7 @@ export class CompanionBot {
       tone: this._getEffectiveTone(),
       timestamp: Date.now()
     });
+    if (item.persistHistoric !== false) this.#appendHistoricLine("Bot", item.text);
     this.#remember("assistant", item.text);
     if (item.after) item.after();
   }

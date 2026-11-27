@@ -7,5 +7,9 @@ Vibe coding
 ## run locally
 npx wrangler dev
 
+
+## run locally
+npx wrangler deploy
+
 ## test
 npm test

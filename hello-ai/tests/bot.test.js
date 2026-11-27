@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { CompanionBot } from "../public/assets/js/chat/bot/companion-bot.js";
 import { createNlu } from "../public/assets/js/chat/bot/nlu.js";
+import { PERSONAS, pickRandomPersona } from "../public/assets/js/chat/bot/personas.js";
 import { getPack } from "../public/assets/js/chat/bot/packs/index.js";
 import { createStorage } from "../public/assets/js/services/storage.js";
 import { memoryBackend } from "./helpers.js";
@@ -20,6 +21,22 @@ function makeBot(extra = {}) {
   return { bot, messages, storage };
 }
 const wait = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("persona archetypes have complete European profiles and all speak French", () => {
+  assert.ok(PERSONAS.length >= 20);
+  const traits = new Set(["shy", "cheerful", "quiet", "playful"]);
+  for (const persona of PERSONAS) {
+    assert.ok(persona.firstName);
+    assert.ok(["male", "female"].includes(persona.gender));
+    assert.ok(persona.city);
+    assert.ok(persona.country);
+    assert.ok(persona.preferredLanguage);
+    assert.equal(persona.speaksFrench, true);
+    assert.ok(traits.has(persona.trait));
+  }
+  assert.equal(pickRandomPersona(() => 0), PERSONAS[0]);
+  assert.equal(pickRandomPersona(() => 0.999), PERSONAS[PERSONAS.length - 1]);
+});
 
 test("NLU: negation and idioms (fr + en)", () => {
   const fr = createNlu(getPack("fr"));

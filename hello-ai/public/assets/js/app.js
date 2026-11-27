@@ -38,6 +38,8 @@ export function createApp({
   const sound = new SoundService({ storage, createAudio });
   const scores = new ScoreBoard(storage);
   const session = new GameSession({ bus, storage, scheduler, rng });
+  let chat = null;
+  let menu = null;
 
   // --- board ---
   const gameEl = byId("game");
@@ -55,9 +57,12 @@ export function createApp({
     boardView,
     i18n,
     sound,
+    scores,
+    getPersona: () => chat?.persona,
     messagesEl: byId("messages"),
     gameEl,
-    onExit: reload
+    onExit: reload,
+    onRematch: () => menu?.rematch()
   });
   presenter.init();
   new LastMoveView({ bus, i18n, doc });
@@ -69,7 +74,10 @@ export function createApp({
     doc,
     messagesEl: byId("messages")
   });
-  bus.on("game:over", ({ winner }) => scores.increment(winner));
+  bus.on("game:over", ({ winner }) => {
+    scores.increment(winner);
+    scores.incrementForPersona(winner, chat.persona);
+  });
 
   // --- chat ---
   const memory = new PlayerMemory({ storage });
@@ -85,7 +93,7 @@ export function createApp({
     sendButton: byId("chat-send"),
     i18n
   });
-  const chat = new ChatController({
+  chat = new ChatController({
     bus,
     panel,
     i18n,
@@ -99,7 +107,7 @@ export function createApp({
   });
 
   // --- menu ---
-  const menu = new Menu({ gameEl, session, i18n, sound, scores, presenter, onRestart: reload, doc });
+  menu = new Menu({ gameEl, session, i18n, sound, scores, presenter, getPersona: () => chat.persona, setNextPersona: (persona) => chat.setNextPersona(persona), getPersonaChoice: () => chat.personaChoice, setPersonaChoice: (choice) => chat.setPersonaChoice(choice), onRestart: reload, doc });
   menu.createMenu();
 
   const versionEl = byId("app-version");

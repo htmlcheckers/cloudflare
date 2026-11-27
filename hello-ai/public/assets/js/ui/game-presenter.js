@@ -5,14 +5,17 @@ import { el } from "./dom.js";
  * "whose turn" message, sound effects and the game-over dialog.
  */
 export class GamePresenter {
-  constructor({ bus, session, boardView, i18n, sound, messagesEl, gameEl, onExit }) {
+  constructor({ bus, session, boardView, i18n, sound, scores, getPersona = () => null, messagesEl, gameEl, onExit, onRematch = onExit }) {
     this.session = session;
     this.boardView = boardView;
     this.i18n = i18n;
     this.sound = sound;
+    this.scores = scores;
+    this.getPersona = getPersona;
     this.messagesEl = messagesEl;
     this.gameEl = gameEl;
     this.onExit = onExit;
+    this.onRematch = onRematch;
     this.timers = new Set();
 
     bus.on("game:configured", (e) => this.#onConfigured(e));
@@ -89,7 +92,12 @@ export class GamePresenter {
 
   #showGameOver(winnerColor) {
     const t = (key) => this.i18n.t(key);
-    const button = el("button", { class: "game-over-button", type: "button" }, t("ok"));
+    const rematchButton = el("button", { class: "game-over-button", type: "button" }, t("rematchGame"));
+    const restartButton = el("button", { class: "game-over-button", type: "button" }, t("restartGame"));
+    const persona = this.getPersona();
+    const score = persona
+      ? this.scores.getByPersona()[persona.firstName] || { player: 0, computer: 0 }
+      : { player: 0, computer: 0 };
     const overlay = el(
       "div",
       {
@@ -104,14 +112,13 @@ export class GamePresenter {
         { class: "game-over-card" },
         el("h2", { id: "game-over-title" }, t("gameOver")),
         el("p", {}, t(winnerColor === "white" ? "whiteWins" : "blackWins")),
-        button
+        el("p", { class: "game-over-score" }, `${persona ? `${persona.firstName} · ` : ""}${t("player")} ${Number(score.player) || 0} · ${t("computer")} ${Number(score.computer) || 0}`),
+        el("div", { class: "game-over-actions" }, rematchButton, restartButton)
       )
     );
     this.gameEl.appendChild(overlay);
-    button.addEventListener("click", () => this.onExit());
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) this.onExit();
-    });
-    button.focus();
+    rematchButton.addEventListener("click", () => this.onRematch());
+    restartButton.addEventListener("click", () => this.onExit());
+    rematchButton.focus();
   }
 }

@@ -1,3 +1,5 @@
+import { PERSONAS, pickRandomPersona } from "./bot/personas.js";
+
 /**
  * Glue between the game and the companion bot.
  *
@@ -9,12 +11,15 @@
  * snapshot, see app/chat-context.js) and through the typed events below.
  */
 export class ChatController {
-  constructor({ bus, panel, i18n, createBot, contextBuilder, personaName = "Lucas" }) {
+  constructor({ bus, panel, i18n, createBot, contextBuilder, selectPersona = pickRandomPersona }) {
     this.panel = panel;
     this.i18n = i18n;
     this.createBot = createBot;
     this.contextBuilder = contextBuilder;
-    this.personaName = personaName;
+    this.selectPersona = selectPersona;
+    this.persona = null;
+    this.nextPersona = null;
+    this.personaChoice = "random";
     this.bot = null;
     this.generation = 0;
     this.pending = false;
@@ -41,8 +46,13 @@ export class ChatController {
     this.panel.activate();
     this.#setPending(true);
 
+    this.persona = this.nextPersona || (this.personaChoice === "random"
+      ? this.selectPersona()
+      : PERSONAS.find((persona) => persona.firstName === this.personaChoice) || this.selectPersona());
+    this.nextPersona = null;
     this.bot = this.createBot({
-      name: this.personaName,
+      name: this.persona.firstName,
+      persona: this.persona,
       language: this.i18n.language,
       onTypingChange: (typing) => {
         if (generation === this.generation) this.panel.showThinking(typing);
@@ -58,6 +68,16 @@ export class ChatController {
     this.generation++;
     if (this.bot) this.bot.destroy();
     this.bot = null;
+  }
+
+  setNextPersona(persona) {
+    this.nextPersona = persona || null;
+  }
+
+  setPersonaChoice(choice) {
+    this.personaChoice = choice === "random" || PERSONAS.some((persona) => persona.firstName === choice)
+      ? choice
+      : "random";
   }
 
   #setPending(pending) {
