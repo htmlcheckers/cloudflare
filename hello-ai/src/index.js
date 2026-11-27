@@ -57,6 +57,43 @@ function cleanPersona(input) {
     };
 }
 
+function addGameSummary(lines, game) {
+    if (!game || typeof game !== 'object' || Array.isArray(game)) return;
+    const count = (value) => Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Math.floor(Number(value)))) : 0;
+    const ruleset = game.ruleset === 'international' ? 'dames internationales' : game.ruleset === 'british' ? 'dames anglaises' : '';
+    const turn = game.turn === 'player' ? 'joueur' : game.turn === 'computer' ? 'ordinateur' : '';
+    const parts = [];
+    if (ruleset) parts.push(`variante : ${ruleset}`);
+    if (Number.isFinite(Number(game.moveNumber))) parts.push(`tour ${count(game.moveNumber)}`);
+    if (turn) parts.push(`au tour du ${turn}`);
+    if (game.score && typeof game.score === 'object') {
+        parts.push(`prises joueur/ordinateur : ${count(game.score.player)}/${count(game.score.computer)}`);
+    }
+    if (game.material && typeof game.material === 'object') {
+        const material = (side) => {
+            const entry = game.material[side] || {};
+            return `${count(entry.men)} pions et ${count(entry.kings)} dames`;
+        };
+        parts.push(`pieces restantes joueur : ${material('player')}; ordinateur : ${material('computer')}`);
+    }
+    const lastMove = Array.isArray(game.lastMoves) ? game.lastMoves[game.lastMoves.length - 1] : null;
+    if (lastMove && typeof lastMove === 'object') {
+        const mover = lastMove.by === 'player' ? 'joueur' : lastMove.by === 'computer' ? 'ordinateur' : '';
+        if (mover) {
+            const captures = count(lastMove.captures);
+            let summary = `dernier coup : ${mover}`;
+            if (captures > 0) summary += `, capture de ${captures} ${captures === 1 ? 'piece' : 'pieces'}`;
+            else summary += ', sans capture';
+            if (lastMove.promoted === true) summary += ', promotion en dame';
+            parts.push(summary);
+        }
+    }
+    if (parts.length) {
+        lines.push(`- Situation actuelle de la partie (resume du plateau) : ${parts.join('; ')}.`);
+        lines.push(`- Tu peux t'appuyer sur ce resume si cela convient naturellement, sans pretendre voir plus que ces informations.`);
+    }
+}
+
 const ipHits = new Map(); // best-effort limiter (per Worker instance)
 
 function buildSystem(ctx) {
@@ -76,6 +113,7 @@ function buildSystem(ctx) {
     const topics = Array.isArray(c.topics) ? c.topics.filter(t => TOPIC_LABELS[t]).map(t => TOPIC_LABELS[t]) : [];
     if (topics.length) lines.push(`- Elle a déjà parlé de : ${topics.join(', ')}.`);
     lines.push(`- Partie : ${GAME_MOODS[c.gameMood] || GAME_MOODS.chill}.`);
+    addGameSummary(lines, c.game);
     lines.push(`- Language : ${c.language || 'french'} but open to other languages.`);
     lines.push(`- ${MORALES[c.playerMorale] || MORALES.neutral}.`);
     if (Number(c.recentLosses) >= 2) lines.push('- Elle a perdu plusieurs parties de suite : encourage-la sans condescendance.');
