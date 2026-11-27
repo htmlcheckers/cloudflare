@@ -221,7 +221,8 @@ export class CompanionBot {
     else if (nlu.scores.high_morale || nlu.scores.humor) s.playerMorale = Math.min(10, s.playerMorale + 2);
 
     const reply = this._buildReply(playerText, nlu);
-    if (reply.llm && this.llm) this.#replyWithLLM(reply, playerText, historySnapshot);
+    const localSafetyReply = nlu.scores.crisis || this.guard.isActive();
+    if (this.llm && !localSafetyReply) this.#replyWithLLM(reply, playerText, historySnapshot);
     else {
       this.#appendHistoricLine("Player", playerText);
       this.#deliverReply(reply);
@@ -232,7 +233,7 @@ export class CompanionBot {
     const texts = [].concat(reply.text);
     texts.forEach((text, i) => {
       const isLast = i === texts.length - 1;
-      this.#send(text, reply.priority || 2, isLast && reply.ask ? () => this.#markAsked(reply.ask) : null);
+      this.#send(text, reply.priority || 2, isLast && reply.ask ? () => this.#markAsked(reply.ask) : null, false, true);
     });
     if (reply.followUp) {
       this.followUpTimer = setTimeout(() => this._askNext(), 4500 * this.pace);
@@ -252,7 +253,13 @@ export class CompanionBot {
   }
 
   #getHistoric() {
-    return (this.memory.storage?.get(this.#historicKey(), "") || "").slice(0, 200);
+    const historic = (this.memory.storage?.get(this.#historicKey(), "") || "").slice(0, 200);
+    // Older versions could save automatic bot greetings without any player turn.
+    if (/^Bot:\s*/i.test(historic) && !/(?:^|\|\s*)Player:\s*/i.test(historic)) {
+      this.memory.storage?.remove(this.#historicKey());
+      return "";
+    }
+    return historic;
   }
 
   #appendHistoricLine(role, content) {
@@ -273,6 +280,7 @@ export class CompanionBot {
     const external = this.getContext() || {};
     const hour = new Date().getHours();
     const distress = this.guard.isActive();
+    const historic = this.#getHistoric().trim();
     return {
       // Flat fields: kept for compatibility with the existing proxy
       botName: this.name,
@@ -288,7 +296,8 @@ export class CompanionBot {
       hour,
       // Structured game context (what is actually happening on the board)
       game: external.game || null,
-      historic: this.#getHistoric(),
+      historic,
+      firstMeeting: historic.length === 0,
       persona: this.persona
         ? {
             firstName: this.persona.firstName,
@@ -495,7 +504,7 @@ export class CompanionBot {
   _buildStartGreeting() {
     const P = this.pack.text;
     const m = this.memory;
-    if (m.gamesPlayed <= 1) return P.startFirst.slice();
+    if (!this.#getHistoric().trim()) return P.startFirst.slice();
     if (m.lossStreak >= 2) return P.startAfterLosses;
     return this._compose("chill", P.startAgain);
   }
@@ -537,13 +546,19 @@ export class CompanionBot {
     return out.charAt(0).toUpperCase() + out.slice(1);
   }
 
-  #send(textOrList, priority = 1, after = null, immediate = false, persistHistoric = true) {
+  #send(textOrList, priority = 1, after = null, immediate = false, persistHistoric = null) {
     const list = [].concat(textOrList).filter(Boolean);
     const items = [];
     list.forEach((raw, i) => {
       const text = this._finalize(raw);
       if (!text) return;
-      items.push({ text, priority, after: i === list.length - 1 ? after : null, immediate, persistHistoric });
+      items.push({
+        text,
+        priority,
+        after: i === list.length - 1 ? after : null,
+        immediate,
+        persistHistoric: persistHistoric ?? Boolean(this.#getHistoric().trim())
+      });
     });
     if (items.length > 0) this.queue.push(items);
   }
