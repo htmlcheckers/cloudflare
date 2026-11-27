@@ -37,7 +37,7 @@ export class CompanionBot {
     this.guard = new CrisisGuard();
     this.setLanguage(options.language || "fr");
 
-    this.history = []; // [{ role: 'user' | 'assistant', content }] sent to the LLM as context
+    this.history = this.#readHistoricState().messages.slice(-2); // unsummarized turns since the last compact
     this.llmSeq = 0; // invalidates an LLM answer if the player writes again while we wait
     this.llmPending = Promise.resolve();
 
@@ -224,7 +224,6 @@ export class CompanionBot {
     const localSafetyReply = nlu.scores.crisis || this.guard.isActive();
     if (this.llm && !localSafetyReply) this.#replyWithLLM(reply, playerText, historySnapshot);
     else {
-      this.#appendHistoricLine("Player", playerText);
       this.#deliverReply(reply);
     }
   }
@@ -243,8 +242,15 @@ export class CompanionBot {
   // --- optional real-LLM layer (through your own proxy) -------------------
 
   #remember(role, content) {
-    this.history.push({ role, content: String(content).slice(0, 600) });
-    if (this.history.length > 24) this.history.splice(0, this.history.length - 24);
+    const message = { role, content: String(content).slice(0, 600) };
+    this.history.push(message);
+    const saved = this.#readHistoricState();
+    saved.messages.push(message);
+    saved.messages = saved.messages.slice(-10);
+    this.#writeHistoricState(saved);
+    // Keep enough context to reach the summarization threshold, then the
+    // successful summary will compact this back to the newest two messages.
+    if (this.history.length > 10) this.history.splice(0, this.history.length - 10);
   }
 
   #historicKey() {
@@ -252,23 +258,38 @@ export class CompanionBot {
     return `checkers_bot_historic_${personaKey}`;
   }
 
-  #getHistoric() {
-    const historic = this.memory.storage?.get(this.#historicKey(), "") || "";
+  #readHistoricState() {
+    const raw = this.memory.storage?.get(this.#historicKey(), "") || "";
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return {
+          summary: typeof parsed.summary === "string" ? parsed.summary : "",
+          messages: Array.isArray(parsed.messages)
+            ? parsed.messages.filter((item) => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string").slice(-10)
+            : []
+        };
+      }
+    } catch { /* migrate the previous plain-text summary below */ }
     // Older versions could save automatic bot greetings without any player turn.
-    if (/^Bot:\s*/i.test(historic) && !/(?:^|\|\s*)Player:\s*/i.test(historic)) {
+    if (/^Bot:\s*/i.test(raw) && !/(?:^|\|\s*)Player:\s*/i.test(raw)) {
       this.memory.storage?.remove(this.#historicKey());
-      return "";
+      return { summary: "", messages: [] };
     }
-    return historic;
+    return { summary: raw, messages: [] };
   }
 
-  #appendHistoricLine(role, content) {
-    const cleanContent = String(content).replace(/\s+/g, " ").trim();
-    const line = `${role}: ${cleanContent}`;
-    const prior = this.#getHistoric();
-    const separator = prior ? " | " : "";
-    const historic = `${prior}${separator}${line}`;
-    this.memory.storage?.set(this.#historicKey(), historic);
+  #writeHistoricState(state) {
+    this.memory.storage?.set(this.#historicKey(), JSON.stringify({
+      summary: state.summary || "",
+      messages: (state.messages || []).slice(-10)
+    }));
+  }
+
+  #getHistoric() {
+    const { summary, messages } = this.#readHistoricState();
+    const recent = messages.map(({ role, content }) => `${role === "user" ? "Player" : "Bot"}: ${content}`).join(" | ");
+    return [summary, recent].filter(Boolean).join(" | ");
   }
 
   /** What leaves the browser. Whitelisted, plain JSON. */
@@ -295,6 +316,10 @@ export class CompanionBot {
       // Structured game context (what is actually happening on the board)
       game: external.game || null,
       historic,
+      historicSummary: this.#readHistoricState().summary,
+      historicRecent: this.#readHistoricState().messages
+        .map(({ role, content }) => `${role === "user" ? "Player" : "Bot"}: ${content}`)
+        .join(" | "),
       firstMeeting: historic.length === 0,
       persona: this.persona
         ? {
@@ -320,7 +345,6 @@ export class CompanionBot {
         reject: this.pack.llmReject
       });
       if (!result?.reply) {
-        this.#appendHistoricLine("Player", playerText);
         if (seq === this.llmSeq) this.#deliverReply(reply);
         return;
       }
@@ -330,16 +354,32 @@ export class CompanionBot {
         this.#send(result.reply, 3, /\?\s*$/.test(result.reply) ? () => this.#markAsked("open") : null, true, false);
       }
 
-      const historic = await this.llm.summarize({
-        history: historySnapshot,
-        context,
-        playerMessage: playerText,
-        reply: current ? result.reply : ""
-      });
-      if (historic) this.memory.storage?.set(this.#historicKey(), historic);
-      else {
-        this.#appendHistoricLine("Player", playerText);
-        if (current) this.#appendHistoricLine("Bot", result.reply);
+      const completedHistory = [
+        ...historySnapshot,
+        ...(current ? [{ role: "assistant", content: result.reply }] : [])
+      ];
+      if (completedHistory.length >= 10) {
+        const summarizedCount = completedHistory.length - 2;
+        const historic = await this.llm.summarize({
+          history: completedHistory.slice(0, summarizedCount),
+          context,
+          playerMessage: playerText,
+          reply: ""
+        });
+        if (historic) {
+          const saved = this.#readHistoricState();
+          saved.summary = historic;
+          this.#writeHistoricState(saved);
+          // Compact only the prefix that was included in the summary. Keep
+          // any newer messages that arrived while the request was in flight.
+          let removeCount = summarizedCount;
+          while (removeCount > 0 && this.history.length > 0) {
+            const expected = historySnapshot[summarizedCount - removeCount];
+            if (!expected || this.history[0].role !== expected.role || this.history[0].content !== expected.content) break;
+            this.history.shift();
+            removeCount--;
+          }
+        }
       }
     });
   }
@@ -568,7 +608,6 @@ export class CompanionBot {
       tone: this._getEffectiveTone(),
       timestamp: Date.now()
     });
-    if (item.persistHistoric !== false) this.#appendHistoricLine("Bot", item.text);
     this.#remember("assistant", item.text);
     if (item.after) item.after();
   }
