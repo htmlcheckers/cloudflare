@@ -253,7 +253,7 @@ export class CompanionBot {
   }
 
   #getHistoric() {
-    const historic = (this.memory.storage?.get(this.#historicKey(), "") || "").slice(0, 200);
+    const historic = this.memory.storage?.get(this.#historicKey(), "") || "";
     // Older versions could save automatic bot greetings without any player turn.
     if (/^Bot:\s*/i.test(historic) && !/(?:^|\|\s*)Player:\s*/i.test(historic)) {
       this.memory.storage?.remove(this.#historicKey());
@@ -264,12 +264,10 @@ export class CompanionBot {
 
   #appendHistoricLine(role, content) {
     const cleanContent = String(content).replace(/\s+/g, " ").trim();
-    const line = `${role}: ${cleanContent.slice(-(200 - role.length - 2))}`;
+    const line = `${role}: ${cleanContent}`;
     const prior = this.#getHistoric();
     const separator = prior ? " | " : "";
-    const room = Math.max(0, 200 - line.length - separator.length);
-    const keptPrior = prior.slice(-room);
-    const historic = `${keptPrior}${keptPrior ? separator : ""}${line}`.slice(-200);
+    const historic = `${prior}${separator}${line}`;
     this.memory.storage?.set(this.#historicKey(), historic);
   }
 
@@ -338,7 +336,7 @@ export class CompanionBot {
         playerMessage: playerText,
         reply: current ? result.reply : ""
       });
-      if (historic) this.memory.storage?.set(this.#historicKey(), historic.slice(0, 200));
+      if (historic) this.memory.storage?.set(this.#historicKey(), historic);
       else {
         this.#appendHistoricLine("Player", playerText);
         if (current) this.#appendHistoricLine("Bot", result.reply);

@@ -52,7 +52,7 @@ export class LlmClient {
           ...(reply ? [{ role: "assistant", content: String(reply).slice(-600) }] : [])
         ]
       : [
-          ...history.slice(-this.maxHistory),
+          ...history,
           ...(reply ? [{ role: "assistant", content: String(reply).slice(-600) }] : [])
         ];
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -66,7 +66,7 @@ export class LlmClient {
       });
       if (!response.ok) throw new Error(`http ${response.status}`);
       const data = await response.json();
-      return typeof data.historic === "string" ? data.historic.trim().slice(0, 200) || null : null;
+      return typeof data.historic === "string" ? data.historic.trim() || null : null;
     } catch {
       return null;
     } finally {
