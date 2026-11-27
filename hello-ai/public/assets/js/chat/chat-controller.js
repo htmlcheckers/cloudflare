@@ -1,4 +1,4 @@
-import { pickRandomPersona } from "./bot/personas.js";
+import { PERSONAS, pickRandomPersona } from "./bot/personas.js";
 
 /**
  * Glue between the game and the companion bot.
@@ -19,6 +19,7 @@ export class ChatController {
     this.selectPersona = selectPersona;
     this.persona = null;
     this.nextPersona = null;
+    this.personaChoice = "random";
     this.bot = null;
     this.generation = 0;
     this.pending = false;
@@ -45,7 +46,9 @@ export class ChatController {
     this.panel.activate();
     this.#setPending(true);
 
-    this.persona = this.nextPersona || this.selectPersona();
+    this.persona = this.nextPersona || (this.personaChoice === "random"
+      ? this.selectPersona()
+      : PERSONAS.find((persona) => persona.firstName === this.personaChoice) || this.selectPersona());
     this.nextPersona = null;
     this.bot = this.createBot({
       name: this.persona.firstName,
@@ -69,6 +72,12 @@ export class ChatController {
 
   setNextPersona(persona) {
     this.nextPersona = persona || null;
+  }
+
+  setPersonaChoice(choice) {
+    this.personaChoice = choice === "random" || PERSONAS.some((persona) => persona.firstName === choice)
+      ? choice
+      : "random";
   }
 
   #setPending(pending) {

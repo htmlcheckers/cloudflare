@@ -867,7 +867,8 @@ body {
 #language-select,
 #ruleset-select,
 #difficulty-select,
-#player-color-select {
+#player-color-select,
+#persona-select {
   min-height: 42px;
   padding: 9px 36px 9px 12px;
   border: 1px solid rgba(255, 255, 255, 0.6);
@@ -911,7 +912,8 @@ body {
 #language-select:hover,
 #ruleset-select:hover,
 #difficulty-select:hover,
-#player-color-select:hover {
+#player-color-select:hover,
+#persona-select:hover {
   border-color: #f6e5c7;
   background-color: #844b27;
 }
@@ -919,7 +921,8 @@ body {
 #language-select:focus-visible,
 #ruleset-select:focus-visible,
 #difficulty-select:focus-visible,
-#player-color-select:focus-visible {
+#player-color-select:focus-visible,
+#persona-select:focus-visible {
   outline: 3px solid #f6e5c7;
   outline-offset: 2px;
   box-shadow: 0 0 0 5px rgba(246, 229, 199, 0.18);

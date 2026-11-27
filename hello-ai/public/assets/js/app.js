@@ -107,7 +107,7 @@ export function createApp({
   });
 
   // --- menu ---
-  menu = new Menu({ gameEl, session, i18n, sound, scores, presenter, getPersona: () => chat.persona, setNextPersona: (persona) => chat.setNextPersona(persona), onRestart: reload, doc });
+  menu = new Menu({ gameEl, session, i18n, sound, scores, presenter, getPersona: () => chat.persona, setNextPersona: (persona) => chat.setNextPersona(persona), getPersonaChoice: () => chat.personaChoice, setPersonaChoice: (choice) => chat.setPersonaChoice(choice), onRestart: reload, doc });
   menu.createMenu();
 
   const versionEl = byId("app-version");

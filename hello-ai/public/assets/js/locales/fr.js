@@ -11,6 +11,8 @@ export const fr = {
   vsOnline: "Contre un joueur en ligne (bientôt)",
   computerSettings: "Paramètres contre l'ordinateur",
   playerColor: "Jouer avec",
+  playAgainst: "Jouer contre",
+  randomPersona: "Personnage aléatoire",
   back: "Retour",
   white: "Blancs",
   black: "Noirs",
