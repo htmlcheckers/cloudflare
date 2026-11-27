@@ -404,6 +404,18 @@ body {
   text-align: center;
 }
 
+.game-over-card .game-over-score {
+  margin-top: -12px;
+  font-size: 16px;
+}
+
+.game-over-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .game-over-button {
   min-width: 120px;
   padding: 10px 24px;
@@ -416,6 +428,10 @@ body {
   font-weight: 700;
   cursor: pointer;
   transition: background-color 120ms ease, transform 120ms ease;
+}
+
+.game-over-actions .game-over-button {
+  flex: 1 1 130px;
 }
 
 .game-over-button:hover {

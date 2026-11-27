@@ -241,6 +241,10 @@ export class Menu {
     this.hiddenMenu();
   }
 
+  rematch() {
+    this.#rematch();
+  }
+
   rules() {
     const menu = this.doc.getElementById("menu");
     menu.classList.add("menu-rules");
