@@ -212,6 +212,7 @@ export class CompanionBot {
     s.lastPlayerMessageTime = Date.now();
     this.llmSeq++;
     this.#remember("user", playerText);
+    const historySnapshot = this.history.slice();
     // Anything casual we were about to say is stale now: answer the player first
     this.queue.dropBelow(2);
 
@@ -220,8 +221,11 @@ export class CompanionBot {
     else if (nlu.scores.high_morale || nlu.scores.humor) s.playerMorale = Math.min(10, s.playerMorale + 2);
 
     const reply = this._buildReply(playerText, nlu);
-    if (reply.llm && this.llm) this.#replyWithLLM(reply, playerText);
-    else this.#deliverReply(reply);
+    if (reply.llm && this.llm) this.#replyWithLLM(reply, playerText, historySnapshot);
+    else {
+      this.#appendHistoricLine("Player", playerText);
+      this.#deliverReply(reply);
+    }
   }
 
   #deliverReply(reply) {
@@ -251,13 +255,15 @@ export class CompanionBot {
     return (this.memory.storage?.get(this.#historicKey(), "") || "").slice(0, 200);
   }
 
-  #appendHistoricReply(historic, reply) {
-    const suffix = `Bot: ${String(reply).replace(/\s+/g, " ").trim()}`;
-    if (suffix.length >= 200) return suffix.slice(-200);
-    const separator = historic ? " | " : "";
-    const priorLimit = 200 - suffix.length - separator.length;
-    const prior = String(historic || "").trim().slice(-Math.max(0, priorLimit));
-    return `${prior}${prior ? separator : ""}${suffix}`.slice(0, 200);
+  #appendHistoricLine(role, content) {
+    const cleanContent = String(content).replace(/\s+/g, " ").trim();
+    const line = `${role}: ${cleanContent.slice(-(200 - role.length - 2))}`;
+    const prior = this.#getHistoric();
+    const separator = prior ? " | " : "";
+    const room = Math.max(0, 200 - line.length - separator.length);
+    const keptPrior = prior.slice(-room);
+    const historic = `${keptPrior}${keptPrior ? separator : ""}${line}`.slice(-200);
+    this.memory.storage?.set(this.#historicKey(), historic);
   }
 
   /** What leaves the browser. Whitelisted, plain JSON. */
@@ -296,29 +302,39 @@ export class CompanionBot {
     };
   }
 
-  #replyWithLLM(reply, playerText) {
+  #replyWithLLM(reply, playerText, historySnapshot) {
     const seq = this.llmSeq;
-    this.llmPending = this.llmPending.catch(() => {}).then(() =>
-      this.llm.ask({
+    this.llmPending = this.llmPending.catch(() => {}).then(async () => {
+      const context = this._llmContext();
+      const result = await this.llm.ask({
         message: playerText,
-        history: this.history,
-        context: this._llmContext(),
+        history: historySnapshot,
+        context,
         reject: this.pack.llmReject
-      })
-    ).then((result) => {
-        if (typeof result?.historic === "string" && result.historic.length > 0) {
-          this.memory.storage?.set(this.#historicKey(), result.historic.slice(0, 200));
-        }
-        if (seq !== this.llmSeq) return; // newer message gets its own answer
-        const text = result?.reply;
-        if (text) {
-          const historic = this.#appendHistoricReply(result.historic || this.#getHistoric(), text);
-          this.memory.storage?.set(this.#historicKey(), historic);
-          this.#send(text, 3, /\?\s*$/.test(text) ? () => this.#markAsked("open") : null, true);
-        } else {
-          this.#deliverReply(reply); // fall back to the built-in reply
-        }
       });
+      if (!result?.reply) {
+        this.#appendHistoricLine("Player", playerText);
+        if (seq === this.llmSeq) this.#deliverReply(reply);
+        return;
+      }
+
+      const current = seq === this.llmSeq;
+      if (current) {
+        this.#send(result.reply, 3, /\?\s*$/.test(result.reply) ? () => this.#markAsked("open") : null, true, false);
+      }
+
+      const historic = await this.llm.summarize({
+        history: historySnapshot,
+        context,
+        playerMessage: playerText,
+        reply: current ? result.reply : ""
+      });
+      if (historic) this.memory.storage?.set(this.#historicKey(), historic.slice(0, 200));
+      else {
+        this.#appendHistoricLine("Player", playerText);
+        if (current) this.#appendHistoricLine("Bot", result.reply);
+      }
+    });
   }
 
   #markAsked(id) {
@@ -521,13 +537,13 @@ export class CompanionBot {
     return out.charAt(0).toUpperCase() + out.slice(1);
   }
 
-  #send(textOrList, priority = 1, after = null, immediate = false) {
+  #send(textOrList, priority = 1, after = null, immediate = false, persistHistoric = true) {
     const list = [].concat(textOrList).filter(Boolean);
     const items = [];
     list.forEach((raw, i) => {
       const text = this._finalize(raw);
       if (!text) return;
-      items.push({ text, priority, after: i === list.length - 1 ? after : null, immediate });
+      items.push({ text, priority, after: i === list.length - 1 ? after : null, immediate, persistHistoric });
     });
     if (items.length > 0) this.queue.push(items);
   }
@@ -539,6 +555,7 @@ export class CompanionBot {
       tone: this._getEffectiveTone(),
       timestamp: Date.now()
     });
+    if (item.persistHistoric !== false) this.#appendHistoricLine("Bot", item.text);
     this.#remember("assistant", item.text);
     if (item.after) item.after();
   }
