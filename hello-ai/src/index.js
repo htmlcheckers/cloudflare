@@ -34,14 +34,43 @@ const GAME_MOODS = {
     tilted: 'la personne domine nettement la partie (félicite-la sincèrement)'
 };
 const MORALES = { low: 'elle semble avoir le moral bas, sois particulièrement doux', good: 'elle semble de bonne humeur', neutral: 'moral neutre' };
+const PERSONA_TRAITS = {
+    cheerful: 'garde un ton enjoue et positif, sans etre insistant',
+    quiet: 'garde un ton calme et reserve, avec des reponses simples',
+    playful: 'utilise une touche de legerete, sans taquiner la personne',
+    shy: 'garde un ton doux et modeste, sans prendre trop de place'
+};
+
+function cleanPersona(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const firstName = /^[A-Za-zÀ-ÿ'-]{1,20}$/.test(input.firstName || '') ? input.firstName : null;
+    const trait = PERSONA_TRAITS[input.trait] ? input.trait : null;
+    if (!firstName || !trait) return null;
+    const cleanText = (value, max = 40) => typeof value === 'string' && /^[A-Za-zÀ-ÿ '-]+$/.test(value) ? value.slice(0, max) : '';
+    return {
+        firstName,
+        trait,
+        gender: ['male', 'female'].includes(input.gender) ? input.gender : '',
+        city: cleanText(input.city),
+        country: cleanText(input.country),
+        preferredLanguage: cleanText(input.preferredLanguage, 24)
+    };
+}
 
 const ipHits = new Map(); // best-effort limiter (per Worker instance)
 
 function buildSystem(ctx) {
     const c = ctx && typeof ctx === 'object' ? ctx : {};
-    const botName = /^[A-Za-zÀ-ÿ'-]{1,20}$/.test(c.botName || '') ? c.botName : 'Lucas';
+    const persona = cleanPersona(c.persona);
+    const botName = persona?.firstName || (/^[A-Za-zÀ-ÿ'-]{1,20}$/.test(c.botName || '') ? c.botName : 'Lucas');
     const lines = [SYSTEM_PROMPT.replace('{bot}', botName), '', 'Contexte :'];
     if (/^[A-Za-zÀ-ÿ'-]{2,20}$/.test(c.playerName || '')) lines.push(`- Elle se prénomme ${c.playerName} (utilise ce prénom rarement).`);
+    if (persona) {
+        lines.push(`- Ton nom de compagnon est ${persona.firstName}; ton style est ${PERSONA_TRAITS[persona.trait]}.`);
+        if (persona.city && persona.country) lines.push(`- Dans ton profil de personnage, tu habites ${persona.city}, ${persona.country}; tu peux le mentionner naturellement si cela convient.`);
+        lines.push('- Le profil est fictif : ne le presente pas comme une experience reelle. Si on te demande, dis clairement que tu es une IA.');
+        if (persona.preferredLanguage) lines.push(`- Langue associee au profil : ${persona.preferredLanguage}; reponds toutefois dans la langue demandee par la personne.`);
+    }
     const topics = Array.isArray(c.topics) ? c.topics.filter(t => TOPIC_LABELS[t]).map(t => TOPIC_LABELS[t]) : [];
     if (topics.length) lines.push(`- Elle a déjà parlé de : ${topics.join(', ')}.`);
     lines.push(`- Partie : ${GAME_MOODS[c.gameMood] || GAME_MOODS.chill}.`);

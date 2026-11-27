@@ -262,7 +262,17 @@ export class CompanionBot {
       recentDistress: distress,
       hour,
       // Structured game context (what is actually happening on the board)
-      game: external.game || null
+      game: external.game || null,
+      persona: this.persona
+        ? {
+            firstName: this.persona.firstName,
+            gender: this.persona.gender,
+            city: this.persona.city,
+            country: this.persona.country,
+            preferredLanguage: this.persona.preferredLanguage,
+            trait: this.persona.trait
+          }
+        : null
     };
   }
 
