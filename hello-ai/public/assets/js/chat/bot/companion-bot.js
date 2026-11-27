@@ -39,6 +39,7 @@ export class CompanionBot {
 
     this.history = []; // [{ role: 'user' | 'assistant', content }] sent to the LLM as context
     this.llmSeq = 0; // invalidates an LLM answer if the player writes again while we wait
+    this.llmPending = Promise.resolve();
 
     this.state = {
       botMood: "chill", // chill | confident | nervous | tilted
@@ -219,7 +220,7 @@ export class CompanionBot {
     else if (nlu.scores.high_morale || nlu.scores.humor) s.playerMorale = Math.min(10, s.playerMorale + 2);
 
     const reply = this._buildReply(playerText, nlu);
-    if (reply.llm && this.llm) this.#replyWithLLM(reply);
+    if (reply.llm && this.llm) this.#replyWithLLM(reply, playerText);
     else this.#deliverReply(reply);
   }
 
@@ -239,6 +240,24 @@ export class CompanionBot {
   #remember(role, content) {
     this.history.push({ role, content: String(content).slice(0, 600) });
     if (this.history.length > 24) this.history.splice(0, this.history.length - 24);
+  }
+
+  #historicKey() {
+    const personaKey = encodeURIComponent((this.persona?.firstName || this.name).toLowerCase());
+    return `checkers_bot_historic_${personaKey}`;
+  }
+
+  #getHistoric() {
+    return (this.memory.storage?.get(this.#historicKey(), "") || "").slice(0, 200);
+  }
+
+  #appendHistoricReply(historic, reply) {
+    const suffix = `Bot: ${String(reply).replace(/\s+/g, " ").trim()}`;
+    if (suffix.length >= 200) return suffix.slice(-200);
+    const separator = historic ? " | " : "";
+    const priorLimit = 200 - suffix.length - separator.length;
+    const prior = String(historic || "").trim().slice(-Math.max(0, priorLimit));
+    return `${prior}${prior ? separator : ""}${suffix}`.slice(0, 200);
   }
 
   /** What leaves the browser. Whitelisted, plain JSON. */
@@ -263,6 +282,7 @@ export class CompanionBot {
       hour,
       // Structured game context (what is actually happening on the board)
       game: external.game || null,
+      historic: this.#getHistoric(),
       persona: this.persona
         ? {
             firstName: this.persona.firstName,
@@ -276,13 +296,24 @@ export class CompanionBot {
     };
   }
 
-  #replyWithLLM(reply) {
+  #replyWithLLM(reply, playerText) {
     const seq = this.llmSeq;
-    this.llm
-      .ask({ history: this.history, context: this._llmContext(), reject: this.pack.llmReject })
-      .then((text) => {
+    this.llmPending = this.llmPending.catch(() => {}).then(() =>
+      this.llm.ask({
+        message: playerText,
+        history: this.history,
+        context: this._llmContext(),
+        reject: this.pack.llmReject
+      })
+    ).then((result) => {
+        if (typeof result?.historic === "string" && result.historic.length > 0) {
+          this.memory.storage?.set(this.#historicKey(), result.historic.slice(0, 200));
+        }
         if (seq !== this.llmSeq) return; // newer message gets its own answer
+        const text = result?.reply;
         if (text) {
+          const historic = this.#appendHistoricReply(result.historic || this.#getHistoric(), text);
+          this.memory.storage?.set(this.#historicKey(), historic);
           this.#send(text, 3, /\?\s*$/.test(text) ? () => this.#markAsked("open") : null, true);
         } else {
           this.#deliverReply(reply); // fall back to the built-in reply

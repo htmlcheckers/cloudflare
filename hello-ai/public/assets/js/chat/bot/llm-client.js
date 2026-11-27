@@ -12,10 +12,10 @@ export class LlmClient {
   }
 
   /**
-   * @param {{history:Array<{role:string,content:string}>, context:object, reject?:RegExp}} request
-   * @returns {Promise<string|null>}
+   * @param {{message:string, history:Array<{role:string,content:string}>, context:object, reject?:RegExp}} request
+   * @returns {Promise<{reply:string,historic:string|null}|null>}
    */
-  async ask({ history, context, reject }) {
+  async ask({ message, history = [], context, reject }) {
     if (!this.endpoint || !this.fetchImpl) return null;
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     const timer = setTimeout(() => controller && controller.abort(), this.timeoutMs);
@@ -23,7 +23,12 @@ export class LlmClient {
       const response = await this.fetchImpl(this.endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history.slice(-this.maxHistory), context }),
+        body: JSON.stringify({
+          messages: context?.historic
+            ? [{ role: "user", content: String(message || "").slice(-600) }]
+            : history.slice(-this.maxHistory),
+          context
+        }),
         signal: controller ? controller.signal : undefined
       });
       if (!response.ok) throw new Error(`http ${response.status}`);
@@ -31,7 +36,8 @@ export class LlmClient {
       const text = typeof data.reply === "string" ? data.reply.trim().slice(0, 400) : "";
       // Safety net: the companion must never claim to be a person.
       if (!text || (reject && reject.test(text))) throw new Error("rejected");
-      return text;
+      const historic = typeof data.historic === "string" ? data.historic.trim().slice(0, 200) : "";
+      return { reply: text, historic: historic || null };
     } catch {
       return null;
     } finally {
