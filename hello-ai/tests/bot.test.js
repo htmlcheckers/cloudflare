@@ -115,3 +115,61 @@ test("the LLM context carries the game snapshot; bad/failed replies fall back", 
   assert.ok(!messages.some((m) => /humain\./i.test(m) && m.startsWith("Je suis un humain")));
   bot.destroy();
 });
+
+test("chat history keeps more than ten messages below the character threshold", async () => {
+  const summarizeRequests = [];
+  const fetchImpl = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.action === "historic") {
+      summarizeRequests.push(body);
+      return { ok: true, json: async () => ({ historic: "summary" }) };
+    }
+    return { ok: true, json: async () => ({ reply: "OK." }) };
+  };
+  const { bot } = makeBot({ llm: { endpoint: "/chat" }, fetchImpl });
+
+  for (let index = 0; index < 6; index += 1) {
+    bot.receivePlayerMessage(`Short message ${index}`);
+    await wait(10);
+  }
+
+  assert.ok(bot.chat.size > 10);
+  assert.equal(bot.chat.summary, "");
+  assert.equal(summarizeRequests.length, 0);
+  bot.destroy();
+});
+
+test("chat summarizes the oldest message-boundary prefix at 5000 characters", async () => {
+  const summarizeRequests = [];
+  const fetchImpl = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.action === "historic") {
+      summarizeRequests.push(body);
+      return { ok: true, json: async () => ({ historic: "rolled-up history" }) };
+    }
+    return { ok: true, json: async () => ({ reply: "OK." }) };
+  };
+  const { bot } = makeBot({ llm: { endpoint: "/chat" }, fetchImpl });
+  const longMessage = "x".repeat(600);
+
+  for (let index = 0; index < 8; index += 1) {
+    bot.receivePlayerMessage(longMessage);
+    await wait(10);
+  }
+  assert.equal(summarizeRequests.length, 0, "4824 characters stays below the threshold");
+
+  bot.receivePlayerMessage(longMessage);
+  await wait(10);
+
+  assert.equal(summarizeRequests.length, 1);
+  const summarizedMessages = summarizeRequests[0].messages;
+  const summarizedCharacters = summarizedMessages.reduce((total, message) => total + message.content.length, 0);
+  assert.ok(summarizedCharacters >= 2500);
+  assert.ok(summarizedCharacters < 5000);
+  assert.deepEqual(summarizedMessages[0], { role: "user", content: longMessage });
+
+  assert.equal(bot.chat.summary, "rolled-up history");
+  assert.ok(bot.chat.size > 0, "messages newer than the summarized prefix remain stored");
+  assert.ok(bot.chat.size < 18, "the summarized prefix is removed from storage");
+  bot.destroy();
+});

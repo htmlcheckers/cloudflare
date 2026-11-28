@@ -5,7 +5,7 @@
 Vibe coding
 
 ## run locally
-npx wrangler dev
+npx wrangler dev --var "ALLOWED_ORIGINS:"
 
 
 ## run locally

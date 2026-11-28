@@ -61,6 +61,10 @@ export class ChatController {
       getContext: () => this.contextBuilder.build()
     });
     this.panel.setPersona(this.bot.name);
+    // Resume after a refresh / new game: show the recent part of the saved conversation.
+    for (const message of this.bot.recentTranscript(8)) {
+      this.panel.addMessage(message.content, message.role === "user" ? "player" : "computer");
+    }
     this.bot.start();
   }
 
