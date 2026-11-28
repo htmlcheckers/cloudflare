@@ -5,6 +5,9 @@ import { LlmClient } from "./llm-client.js";
 import { CrisisGuard } from "./safety.js";
 import { getPack } from "./packs/index.js";
 
+const SUMMARY_TRIGGER_CHARACTERS = 5000;
+const SUMMARY_TARGET_CHARACTERS = 2500;
+
 /**
  * CompanionBot – the chat persona selected for the current game.
  *
@@ -37,7 +40,7 @@ export class CompanionBot {
     this.guard = new CrisisGuard();
     this.setLanguage(options.language || "fr");
 
-    this.history = this.#readHistoricState().messages.slice(-10);
+    this.history = this.#readHistoricState().messages;
     this.llmSeq = 0; // invalidates an LLM answer if the player writes again while we wait
     this.llmPending = Promise.resolve();
 
@@ -246,11 +249,7 @@ export class CompanionBot {
     this.history.push(message);
     const saved = this.#readHistoricState();
     saved.messages.push(message);
-    saved.messages = saved.messages.slice(-10);
     this.#writeHistoricState(saved);
-    // Keep enough context to reach the summarization threshold, then compact
-    // to the newest ten messages after a successful summary.
-    if (this.history.length > 20) this.history.splice(0, this.history.length - 20);
   }
 
   #historicKey() {
@@ -266,7 +265,7 @@ export class CompanionBot {
         return {
           summary: typeof parsed.summary === "string" ? parsed.summary : "",
           messages: Array.isArray(parsed.messages)
-            ? parsed.messages.filter((item) => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string").slice(-10)
+            ? parsed.messages.filter((item) => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string")
             : []
         };
       }
@@ -282,7 +281,7 @@ export class CompanionBot {
   #writeHistoricState(state) {
     this.memory.storage?.set(this.#historicKey(), JSON.stringify({
       summary: state.summary || "",
-      messages: (state.messages || []).slice(-10)
+      messages: state.messages || []
     }));
   }
 
@@ -358,10 +357,21 @@ export class CompanionBot {
         ...historySnapshot,
         ...(current ? [{ role: "assistant", content: result.reply }] : [])
       ];
-      if (completedHistory.length >= 20) {
-        const summarizedCount = completedHistory.length - 10;
+      const conversationCharacters = completedHistory.reduce(
+        (total, message) => total + message.content.length,
+        0
+      );
+      if (conversationCharacters >= SUMMARY_TRIGGER_CHARACTERS) {
+        const messagesToSummarize = [];
+        let summarizedCharacters = 0;
+        for (const message of completedHistory) {
+          if (summarizedCharacters >= SUMMARY_TARGET_CHARACTERS) break;
+          messagesToSummarize.push(message);
+          summarizedCharacters += message.content.length;
+        }
+
         const historic = await this.llm.summarize({
-          history: completedHistory.slice(0, summarizedCount),
+          history: messagesToSummarize,
           context,
           playerMessage: playerText,
           reply: ""
@@ -369,15 +379,21 @@ export class CompanionBot {
         if (historic) {
           const saved = this.#readHistoricState();
           saved.summary = historic;
+          let savedRemoveCount = messagesToSummarize.length;
+          while (savedRemoveCount > 0 && saved.messages.length > 0) {
+            const expected = messagesToSummarize[messagesToSummarize.length - savedRemoveCount];
+            if (saved.messages[0].role !== expected.role || saved.messages[0].content !== expected.content) break;
+            saved.messages.shift();
+            savedRemoveCount--;
+          }
           this.#writeHistoricState(saved);
-          // Compact only the prefix that was included in the summary. Keep
-          // any newer messages that arrived while the request was in flight.
-          let removeCount = summarizedCount;
-          while (removeCount > 0 && this.history.length > 0) {
-            const expected = historySnapshot[summarizedCount - removeCount];
-            if (!expected || this.history[0].role !== expected.role || this.history[0].content !== expected.content) break;
+
+          let memoryRemoveCount = messagesToSummarize.length;
+          while (memoryRemoveCount > 0 && this.history.length > 0) {
+            const expected = messagesToSummarize[messagesToSummarize.length - memoryRemoveCount];
+            if (this.history[0].role !== expected.role || this.history[0].content !== expected.content) break;
             this.history.shift();
-            removeCount--;
+            memoryRemoveCount--;
           }
         }
       }

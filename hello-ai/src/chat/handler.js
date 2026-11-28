@@ -42,7 +42,7 @@ export async function serveChatBot(request, env) {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
     
-    const messages = sanitizeMessages(body && body.messages, body && body.action === 'historic' ? 24 : 12);
+    const messages = sanitizeMessages(body && body.messages, body && body.action === 'historic' ? 2500 : 12);
     if (body && body.action === 'historic') {
         const previousHistoric = typeof body.context?.historicSummary === 'string'
             ? body.context.historicSummary
