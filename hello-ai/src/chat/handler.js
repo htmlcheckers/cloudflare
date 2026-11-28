@@ -78,7 +78,6 @@ export async function serveChatBot(request, env) {
     };
     let response;
     try {
-        console.log('Calling AI:', chat);
         response = await env.AI.run(LLM_MODEL, chat);
     } catch (error) {
         console.log('Error calling AI:', error);

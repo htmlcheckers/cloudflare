@@ -329,7 +329,6 @@ export class CompanionBot {
   async #compactIfNeeded() {
     if (!this.llm || Date.now() < this.compactBackoffUntil) return;
     const ticket = this.chat.beginCompaction();
-    console.log("Compaction ticket:", ticket);
     if (!ticket) return;
 
     let summary = null;
