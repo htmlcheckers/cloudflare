@@ -3,10 +3,11 @@ import { PlayerMemory } from "./player-memory.js";
 import { MessageQueue } from "./message-queue.js";
 import { LlmClient } from "./llm-client.js";
 import { CrisisGuard } from "./safety.js";
+import { getConversationStore, clearAllConversations } from "./conversation-store.js";
 import { getPack } from "./packs/index.js";
 
-const SUMMARY_TRIGGER_CHARACTERS = 5000;
-const SUMMARY_TARGET_CHARACTERS = 2500;
+const COMPACT_BACKOFF_BASE_MS = 15000;
+const COMPACT_BACKOFF_MAX_MS = 300000;
 
 /**
  * CompanionBot – the chat persona selected for the current game.
@@ -18,8 +19,15 @@ const SUMMARY_TARGET_CHARACTERS = 2500;
  *                                    | botWin | botLose | playerIdle
  *   updateBoardState(botScore, playerScore)
  *   startPlayerTurnTimer() / resetIdleTimer()
+ *   recentTranscript(n?)             last messages, to re-render the panel after a refresh
  *   setLanguage('fr' | 'en')
+ *   forgetPlayer()
  *   destroy()
+ *
+ * Conversation history lives in a ConversationStore (conversation-store.js): a
+ * summary plus the "hot" messages, persisted per persona on every update.
+ * When the hot conversation grows past a threshold, its oldest messages are
+ * summarised through the LLM proxy and removed only if that succeeds.
  *
  * Everything the bot needs to know about the game arrives through the injected
  * `getContext()` function (see app/chat-context.js). The bot never reads globals
@@ -37,12 +45,14 @@ export class CompanionBot {
     this.cooldownMs = options.cooldownMs || 9000;
     this.memory = options.memory || new PlayerMemory({ storage: options.storage });
     this.llm = options.llm && options.llm.endpoint ? new LlmClient({ ...options.llm, fetchImpl: options.fetchImpl }) : null;
+    this.chat = options.chatStore || getConversationStore(this.memory.storage, this.name, options.historyLimits);
     this.guard = new CrisisGuard();
     this.setLanguage(options.language || "fr");
 
-    this.history = this.#readHistoricState().messages;
     this.llmSeq = 0; // invalidates an LLM answer if the player writes again while we wait
     this.llmPending = Promise.resolve();
+    this.compactFailures = 0;
+    this.compactBackoffUntil = 0;
 
     this.state = {
       botMood: "chill", // chill | confident | nervous | tilted
@@ -83,6 +93,8 @@ export class CompanionBot {
 
   start() {
     this.triggerEvent("start", true);
+    // A refresh may have left a full hot conversation behind: retry the summary now.
+    this.#compactIfNeeded();
   }
 
   onGameEvent(eventName, force = false) {
@@ -119,7 +131,11 @@ export class CompanionBot {
     }
   }
 
-  /** Stop every pending timer (leaving the page / starting a new game). */
+  /**
+   * Stop every pending timer (leaving the page / starting a new game).
+   * An in-flight summary is deliberately NOT cancelled: the store is shared per
+   * persona, so a late commit is safe and avoids losing the work.
+   */
   destroy() {
     this.resetIdleTimer();
     clearTimeout(this.followUpTimer);
@@ -128,9 +144,15 @@ export class CompanionBot {
     this.queue.clear();
   }
 
-  /** Erase everything the bot remembered about the player. */
+  /** Erase everything the bot remembered about the player (profile + every conversation). */
   forgetPlayer() {
     this.memory.forget();
+    clearAllConversations(this.memory.storage);
+  }
+
+  /** Last messages of this persona's conversation, to re-render the panel after a refresh. */
+  recentTranscript(n = 8) {
+    return this.chat.transcript(n);
   }
 
   get recentDistress() {
@@ -155,7 +177,8 @@ export class CompanionBot {
       s.turnCount = 0;
       s.botMood = "chill";
       s.idleNudges = 0;
-      this.#send(this._buildStartGreeting(), 1);
+      // A greeting is only worth keeping once the player has actually talked to us.
+      this.#send(this._buildStartGreeting(), 1, null, false, this.chat.hasPlayerTurn());
       clearTimeout(this.followUpTimer);
       this.followUpTimer = setTimeout(() => {
         if (Date.now() - s.lastPlayerMessageTime > 8000) this._askNext();
@@ -178,14 +201,16 @@ export class CompanionBot {
       if (Math.random() > chance) return;
     }
 
+    // Game-event commentary is shown but not stored: it is noise for the history
+    // (the LLM already receives the board through context.game).
     const line = this._generateEventLine(eventName);
     if (line) {
-      if (isCritical) this.#send(line, 1.5);
-      else this.#scheduleOptionalReply(line, 1);
+      if (isCritical) this.#send(line, 1.5, null, false, false);
+      else this.#scheduleOptionalReply(line, 1, null, false);
     }
   }
 
-  #scheduleOptionalReply(text, priority = 1, after = null) {
+  #scheduleOptionalReply(text, priority = 1, after = null, persist = false) {
     if (
       this.optionalReplyTimers.size > 0 ||
       this.queue.busy ||
@@ -194,7 +219,7 @@ export class CompanionBot {
     const delay = (800 + Math.random() * 1800) * this.pace;
     const timer = setTimeout(() => {
       this.optionalReplyTimers.delete(timer);
-      this.#send(text, priority, after);
+      this.#send(text, priority, after, false, persist);
     }, delay);
     this.optionalReplyTimers.add(timer);
   }
@@ -214,8 +239,7 @@ export class CompanionBot {
     this.#cancelOptionalReplies();
     s.lastPlayerMessageTime = Date.now();
     this.llmSeq++;
-    this.#remember("user", playerText);
-    const historySnapshot = this.history.slice();
+    this.chat.append("user", playerText);
     // Anything casual we were about to say is stale now: answer the player first
     this.queue.dropBelow(2);
 
@@ -225,10 +249,8 @@ export class CompanionBot {
 
     const reply = this._buildReply(playerText, nlu);
     const localSafetyReply = nlu.scores.crisis || this.guard.isActive();
-    if (this.llm && !localSafetyReply) this.#replyWithLLM(reply, playerText, historySnapshot);
-    else {
-      this.#deliverReply(reply);
-    }
+    if (this.llm && !localSafetyReply) this.#replyWithLLM(reply, this.chat.hot());
+    else this.#deliverReply(reply);
   }
 
   #deliverReply(reply) {
@@ -244,63 +266,12 @@ export class CompanionBot {
 
   // --- optional real-LLM layer (through your own proxy) -------------------
 
-  #remember(role, content) {
-    const message = { role, content: String(content).slice(0, 600) };
-    this.history.push(message);
-    const saved = this.#readHistoricState();
-    saved.messages.push(message);
-    this.#writeHistoricState(saved);
-  }
-
-  #historicKey() {
-    const personaKey = encodeURIComponent((this.persona?.firstName || this.name).toLowerCase());
-    return `checkers_bot_historic_${personaKey}`;
-  }
-
-  #readHistoricState() {
-    const raw = this.memory.storage?.get(this.#historicKey(), "") || "";
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
-        return {
-          summary: typeof parsed.summary === "string" ? parsed.summary : "",
-          messages: Array.isArray(parsed.messages)
-            ? parsed.messages.filter((item) => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string")
-            : []
-        };
-      }
-    } catch { /* migrate the previous plain-text summary below */ }
-    // Older versions could save automatic bot greetings without any player turn.
-    if (/^Bot:\s*/i.test(raw) && !/(?:^|\|\s*)Player:\s*/i.test(raw)) {
-      this.memory.storage?.remove(this.#historicKey());
-      return { summary: "", messages: [] };
-    }
-    return { summary: raw, messages: [] };
-  }
-
-  #writeHistoricState(state) {
-    this.memory.storage?.set(this.#historicKey(), JSON.stringify({
-      summary: state.summary || "",
-      messages: state.messages || []
-    }));
-  }
-
-  #getHistoric() {
-    const { summary, messages } = this.#readHistoricState();
-    const recent = messages.map(({ role, content }) => `${role === "user" ? "Player" : "Bot"}: ${content}`).join(" | ");
-    return [summary, recent].filter(Boolean).join(" | ");
-  }
-
   /** What leaves the browser. Whitelisted, plain JSON. */
   _llmContext() {
     const s = this.state;
     const m = this.memory;
     const external = this.getContext() || {};
-    const hour = new Date().getHours();
-    const distress = this.guard.isActive();
-    const historic = this.#getHistoric().trim();
     return {
-      // Flat fields: kept for compatibility with the existing proxy
       botName: this.name,
       playerName: m.name,
       topics: m.topics.slice(),
@@ -310,16 +281,13 @@ export class CompanionBot {
       gamesPlayed: m.gamesPlayed,
       language: this.language,
       recentLosses: m.lossStreak,
-      recentDistress: distress,
-      hour,
+      recentDistress: this.guard.isActive(),
+      hour: new Date().getHours(),
       // Structured game context (what is actually happening on the board)
       game: external.game || null,
-      historic,
-      historicSummary: this.#readHistoricState().summary,
-      historicRecent: this.#readHistoricState().messages
-        .map(({ role, content }) => `${role === "user" ? "Player" : "Bot"}: ${content}`)
-        .join(" | "),
-      firstMeeting: historic.length === 0,
+      // Conversation: the summary travels here, the hot messages travel as `messages`
+      historicSummary: this.chat.summary,
+      firstMeeting: !this.chat.hasPlayerTurn(),
       persona: this.persona
         ? {
             firstName: this.persona.firstName,
@@ -333,71 +301,53 @@ export class CompanionBot {
     };
   }
 
-  #replyWithLLM(reply, playerText, historySnapshot) {
+  /** Ask the LLM, validate, send. Never touches summarising: that runs on its own. */
+  #replyWithLLM(reply, messages) {
     const seq = this.llmSeq;
     this.llmPending = this.llmPending.catch(() => {}).then(async () => {
-      const context = this._llmContext();
       const result = await this.llm.ask({
-        message: playerText,
-        history: historySnapshot,
-        context,
+        messages, // the hot window; already ends with the player's message
+        context: this._llmContext(),
         reject: this.pack.llmReject
       });
+      if (seq !== this.llmSeq) return; // the player wrote again meanwhile: drop the stale answer
       if (!result?.reply) {
-        if (seq === this.llmSeq) this.#deliverReply(reply);
+        this.#deliverReply(reply);
         return;
       }
-
-      const current = seq === this.llmSeq;
-      if (current) {
-        this.#send(result.reply, 3, /\?\s*$/.test(result.reply) ? () => this.#markAsked("open") : null, true, false);
-      }
-
-      const completedHistory = [
-        ...historySnapshot,
-        ...(current ? [{ role: "assistant", content: result.reply }] : [])
-      ];
-      const conversationCharacters = completedHistory.reduce(
-        (total, message) => total + message.content.length,
-        0
-      );
-      if (conversationCharacters >= SUMMARY_TRIGGER_CHARACTERS) {
-        const messagesToSummarize = [];
-        let summarizedCharacters = 0;
-        for (const message of completedHistory) {
-          if (summarizedCharacters >= SUMMARY_TARGET_CHARACTERS) break;
-          messagesToSummarize.push(message);
-          summarizedCharacters += message.content.length;
-        }
-
-        const historic = await this.llm.summarize({
-          history: messagesToSummarize,
-          context,
-          playerMessage: playerText,
-          reply: ""
-        });
-        if (historic) {
-          const saved = this.#readHistoricState();
-          saved.summary = historic;
-          let savedRemoveCount = messagesToSummarize.length;
-          while (savedRemoveCount > 0 && saved.messages.length > 0) {
-            const expected = messagesToSummarize[messagesToSummarize.length - savedRemoveCount];
-            if (saved.messages[0].role !== expected.role || saved.messages[0].content !== expected.content) break;
-            saved.messages.shift();
-            savedRemoveCount--;
-          }
-          this.#writeHistoricState(saved);
-
-          let memoryRemoveCount = messagesToSummarize.length;
-          while (memoryRemoveCount > 0 && this.history.length > 0) {
-            const expected = messagesToSummarize[messagesToSummarize.length - memoryRemoveCount];
-            if (this.history[0].role !== expected.role || this.history[0].content !== expected.content) break;
-            this.history.shift();
-            memoryRemoveCount--;
-          }
-        }
-      }
+      this.#send(result.reply, 3, /\?\s*$/.test(result.reply) ? () => this.#markAsked("open") : null, true, true);
     });
+  }
+
+  // --- history compaction -------------------------------------------------
+
+  /**
+   * Summarise the oldest hot messages. Single-flight (the store refuses a second
+   * ticket while one is open), non-blocking for replies, with exponential backoff.
+   * Messages are removed from the hot conversation only if the summary succeeds.
+   */
+  async #compactIfNeeded() {
+    if (!this.llm || Date.now() < this.compactBackoffUntil) return;
+    const ticket = this.chat.beginCompaction();
+    console.log("Compaction ticket:", ticket);
+    if (!ticket) return;
+
+    let summary = null;
+    try {
+      summary = await this.llm.summarize({ messages: ticket.messages, previousSummary: ticket.previousSummary });
+    } catch {
+      summary = null;
+    }
+
+    if (summary && this.chat.commitCompaction(ticket, summary)) {
+      this.compactFailures = 0;
+      this.compactBackoffUntil = 0;
+      return this.#compactIfNeeded(); // still above the threshold? go again
+    }
+    this.chat.abortCompaction();
+    this.compactFailures++;
+    this.compactBackoffUntil =
+      Date.now() + Math.min(COMPACT_BACKOFF_MAX_MS, COMPACT_BACKOFF_BASE_MS * 2 ** this.compactFailures);
   }
 
   #markAsked(id) {
@@ -542,7 +492,8 @@ export class CompanionBot {
       if (q.id === "how") s.discussedTopics.add("how");
       if (q.id === "weather") q.text = this._buildWeatherPrompt();
     }
-    this.#scheduleOptionalReply(q.text, 0.5, () => this.#markAsked(q.id));
+    // Questions are part of the conversation: keep them in the history.
+    this.#scheduleOptionalReply(q.text, 0.5, () => this.#markAsked(q.id), true);
   }
 
   // --- sentence builders --------------------------------------------------
@@ -558,7 +509,7 @@ export class CompanionBot {
   _buildStartGreeting() {
     const P = this.pack.text;
     const m = this.memory;
-    if (!this.#getHistoric().trim()) return P.startFirst.slice();
+    if (!this.chat.hasPlayerTurn()) return P.startFirst.slice();
     if (m.lossStreak >= 2) return P.startAfterLosses;
     return this._compose("chill", P.startAgain);
   }
@@ -600,7 +551,8 @@ export class CompanionBot {
     return out.charAt(0).toUpperCase() + out.slice(1);
   }
 
-  #send(textOrList, priority = 1, after = null, immediate = false, persistHistoric = null) {
+  /** `persist`: store the message in the conversation history once it is delivered. */
+  #send(textOrList, priority = 1, after = null, immediate = false, persist = true) {
     const list = [].concat(textOrList).filter(Boolean);
     const items = [];
     list.forEach((raw, i) => {
@@ -611,7 +563,7 @@ export class CompanionBot {
         priority,
         after: i === list.length - 1 ? after : null,
         immediate,
-        persistHistoric: persistHistoric ?? Boolean(this.#getHistoric().trim())
+        persist
       });
     });
     if (items.length > 0) this.queue.push(items);
@@ -624,8 +576,9 @@ export class CompanionBot {
       tone: this._getEffectiveTone(),
       timestamp: Date.now()
     });
-    this.#remember("assistant", item.text);
+    if (item.persist) this.chat.append("assistant", item.text);
     if (item.after) item.after();
+    void this.#compactIfNeeded();
   }
 }
 

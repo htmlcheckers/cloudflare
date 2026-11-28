@@ -126,15 +126,15 @@ test("chat history keeps more than ten messages below the character threshold", 
     }
     return { ok: true, json: async () => ({ reply: "OK." }) };
   };
-  const { bot, storage } = makeBot({ llm: { endpoint: "/chat" }, fetchImpl });
+  const { bot } = makeBot({ llm: { endpoint: "/chat" }, fetchImpl });
 
   for (let index = 0; index < 6; index += 1) {
     bot.receivePlayerMessage(`Short message ${index}`);
     await wait(10);
   }
 
-  const saved = JSON.parse(storage.get("checkers_bot_historic_lucas"));
-  assert.ok(saved.messages.length > 10);
+  assert.ok(bot.chat.size > 10);
+  assert.equal(bot.chat.summary, "");
   assert.equal(summarizeRequests.length, 0);
   bot.destroy();
 });
@@ -149,7 +149,7 @@ test("chat summarizes the oldest message-boundary prefix at 5000 characters", as
     }
     return { ok: true, json: async () => ({ reply: "OK." }) };
   };
-  const { bot, storage } = makeBot({ llm: { endpoint: "/chat" }, fetchImpl });
+  const { bot } = makeBot({ llm: { endpoint: "/chat" }, fetchImpl });
   const longMessage = "x".repeat(600);
 
   for (let index = 0; index < 8; index += 1) {
@@ -168,9 +168,8 @@ test("chat summarizes the oldest message-boundary prefix at 5000 characters", as
   assert.ok(summarizedCharacters < 5000);
   assert.deepEqual(summarizedMessages[0], { role: "user", content: longMessage });
 
-  const saved = JSON.parse(storage.get("checkers_bot_historic_lucas"));
-  assert.equal(saved.summary, "rolled-up history");
-  assert.ok(saved.messages.length > 0, "messages newer than the summarized prefix remain stored");
-  assert.ok(saved.messages.length < 18, "the summarized prefix is removed from storage");
+  assert.equal(bot.chat.summary, "rolled-up history");
+  assert.ok(bot.chat.size > 0, "messages newer than the summarized prefix remain stored");
+  assert.ok(bot.chat.size < 18, "the summarized prefix is removed from storage");
   bot.destroy();
 });
