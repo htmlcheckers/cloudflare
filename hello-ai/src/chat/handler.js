@@ -6,9 +6,10 @@ const ipHits = new Map(); // best-effort limiter (per Worker instance)
 export async function serveChatBot(request, env) {
     const origin = request.headers.get('Origin') || '';
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-    const originOk = allowed.length === 0 || allowed.includes(origin);
+    const allowAnyOrigin = allowed.length === 0 || allowed.includes('*');
+    const originOk = allowAnyOrigin || allowed.includes(origin);
     const cors = {
-        'Access-Control-Allow-Origin': allowed.length === 0 ? '*' : (originOk ? origin : allowed[0]),
+        'Access-Control-Allow-Origin': allowAnyOrigin ? '*' : (originOk ? origin : allowed[0]),
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
         'Vary': 'Origin'
